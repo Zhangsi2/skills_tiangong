@@ -62,6 +62,10 @@ class BatchRunner:
         self.max_workers = args.workers
         self.max_attempts = args.max_attempts
         self.operation = args.operation
+        self.heartbeat_seconds = args.heartbeat_seconds
+        self.stall_timeout_seconds = args.stall_timeout_seconds
+
+        self._last_heartbeat_monotonic = 0.0
 
         self.tasks: dict[str, Task] = {}
         self.procs: dict[str, subprocess.Popen[str]] = {}
@@ -160,6 +164,27 @@ class BatchRunner:
         for key, proc in list(self.procs.items()):
             rc = proc.poll()
             if rc is None:
+                # stall detection by log freshness (no log update for too long)
+                task = self.tasks[key]
+                if self.stall_timeout_seconds and task.log_path:
+                    try:
+                        log_mtime = Path(task.log_path).stat().st_mtime
+                        idle_for = time.time() - log_mtime
+                        if idle_for > self.stall_timeout_seconds:
+                            proc.terminate()
+                            task.status = "failed"
+                            task.last_error = (
+                                f"stalled: no log update for {idle_for:.1f}s "
+                                f"(timeout={self.stall_timeout_seconds:.1f}s)"
+                            )
+                            task.process_pid = None
+                            task.updated_at = now_iso()
+                            task.finished_at = now_iso()
+                            task.exit_code = 124
+                            done_keys.append(key)
+                            continue
+                    except FileNotFoundError:
+                        pass
                 continue
             task = self.tasks[key]
             task.exit_code = rc
@@ -209,6 +234,38 @@ class BatchRunner:
             out[t.status] += 1
         return out
 
+    def emit_heartbeat_if_due(self, *, force: bool = False) -> None:
+        now_mono = time.monotonic()
+        if not force and (now_mono - self._last_heartbeat_monotonic) < self.heartbeat_seconds:
+            return
+        self._last_heartbeat_monotonic = now_mono
+
+        stat = self.summary()
+        running_lines: list[str] = []
+        for key, task in self.tasks.items():
+            if task.status != "running":
+                continue
+            elapsed = "?"
+            if task.started_at:
+                try:
+                    dt = datetime.fromisoformat(task.started_at)
+                    elapsed = f"{(datetime.now(timezone.utc) - dt).total_seconds():.1f}s"
+                except Exception:
+                    pass
+            idle = "?"
+            if task.log_path and Path(task.log_path).exists():
+                idle = f"{time.time() - Path(task.log_path).stat().st_mtime:.1f}s"
+            running_lines.append(
+                f"{Path(task.flow_file).name} mode={task.mode} attempt={task.attempts} elapsed={elapsed} log_idle={idle}"
+            )
+
+        print(
+            f"[heartbeat] pending={stat['pending']} running={stat['running']} success={stat['success']} failed={stat['failed']}",
+            file=sys.stderr,
+        )
+        for line in running_lines:
+            print(f"[heartbeat] {line}", file=sys.stderr)
+
     def run(self) -> int:
         self.load_or_init()
 
@@ -221,13 +278,10 @@ class BatchRunner:
 
         while True:
             self.poll_running()
-            stat = self.summary()
-            print(
-                f"[batch] pending={stat['pending']} running={stat['running']} success={stat['success']} failed={stat['failed']}",
-                file=sys.stderr,
-            )
+            self.emit_heartbeat_if_due()
 
             if self._stop:
+                self.emit_heartbeat_if_due(force=True)
                 self.save_state()
                 return 130
 
@@ -245,6 +299,7 @@ class BatchRunner:
 
             time.sleep(self.args.poll_seconds)
 
+        self.emit_heartbeat_if_due(force=True)
         self.save_state()
         final = self.summary()
         return 0 if final["failed"] == 0 else 1
@@ -259,6 +314,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--operation", choices=("produce", "treat"), default="produce")
     p.add_argument("--max-attempts", type=int, default=3, help="Max attempts per flow (resume counts)")
     p.add_argument("--poll-seconds", type=float, default=5.0, help="Polling interval for child processes")
+    p.add_argument(
+        "--heartbeat-seconds",
+        type=float,
+        default=30.0,
+        help="Emit scheduler heartbeat every N seconds.",
+    )
+    p.add_argument(
+        "--stall-timeout-seconds",
+        type=float,
+        default=600.0,
+        help="Mark running task stalled if log not updated for N seconds (0 to disable).",
+    )
     p.add_argument("--python-bin", default=os.environ.get("PAB_PYTHON_BIN", "python3"))
     p.add_argument("--reset", action="store_true", help="Ignore existing state and reinitialize tasks")
     return p.parse_args()

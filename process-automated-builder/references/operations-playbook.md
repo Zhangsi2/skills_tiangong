@@ -29,7 +29,22 @@ process-automated-builder/scripts/run-process-automated-builder.sh \
   -- --operation produce
 ```
 
-## 4) Stage Debugging
+## 4) Batch Parallel Run (Safe Wrapper)
+```bash
+process-automated-builder/scripts/run-process-automated-builder-parallel.sh \
+  --flow-dir /abs/path/to/flow-dir \
+  --out-dir /abs/path/to/batch-out \
+  --workers 3 \
+  --operation produce \
+  --python-bin process-automated-builder/.venv/bin/python
+```
+
+Notes:
+- Uses persistent `batch_state.json` and per-attempt logs in `batch_logs/`.
+- Avoids prior xargs/env leakage that could write logs to `/<file>.log` and trigger permission-denied false failures.
+- Supports auto-resume on interrupted sessions.
+
+## 5) Stage Debugging
 ```bash
 process-automated-builder/scripts/run-process-automated-builder.sh \
   --mode langgraph \
@@ -37,14 +52,14 @@ process-automated-builder/scripts/run-process-automated-builder.sh \
   -- --stop-after matches --operation produce
 ```
 
-## 5) Resume Existing Run
+## 6) Resume Existing Run
 ```bash
 process-automated-builder/scripts/run-process-automated-builder.sh \
   --mode langgraph \
   -- --resume --run-id <run_id>
 ```
 
-## 6) Publish Existing Run
+## 7) Publish Existing Run
 ```bash
 process-automated-builder/scripts/run-process-automated-builder.sh \
   --mode langgraph \
