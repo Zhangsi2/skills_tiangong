@@ -66,6 +66,27 @@ process-automated-builder/scripts/run-process-automated-builder.sh \
   -- --publish-only --run-id <run_id> --commit
 ```
 
+## 8) Background Persistent Run (systemd user service)
+```bash
+# install service + default env template
+process-automated-builder/scripts/systemd/install-process-from-flow-batch-service.sh
+
+# edit runtime settings
+$EDITOR ~/.config/process-from-flow-batch/env
+
+# start and enable auto-restart
+systemctl --user daemon-reload
+systemctl --user enable --now process-from-flow-batch.service
+
+# monitor
+systemctl --user status process-from-flow-batch.service
+journalctl --user -u process-from-flow-batch.service -f
+```
+
+Notes:
+- Service is configured with `Restart=always`; if runner is externally killed, it relaunches and continues from `STATE_PATH`.
+- Default `STALL_TIMEOUT_SECONDS` in env example is set to `1800` to reduce false positives on long stage-7 runs.
+
 ## Runtime Notes
 - New runs require flow input; no default flow file is used.
 - Resume mode can omit `--flow` and read it from cached state.

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable, Literal, TypedDict, get_args, get_origin
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zipfile import ZipFile
 
@@ -604,6 +604,80 @@ def _resolve_location_code(
         if llm_code:
             return llm_code
     return "GLO"
+
+
+@lru_cache(maxsize=1)
+def _allowed_process_location_codes() -> set[str]:
+    field = ProcessInformationGeographyLocationOfOperationSupplyOrProduction.model_fields.get("location")
+    if field is None:
+        return set()
+
+    def _collect(annotation: Any) -> set[str]:
+        origin = get_origin(annotation)
+        args = get_args(annotation)
+        if origin is Literal:
+            return {str(item).strip().upper() for item in args if isinstance(item, str) and str(item).strip()}
+        values: set[str] = set()
+        for item in args:
+            values |= _collect(item)
+        return values
+
+    return _collect(field.annotation)
+
+
+def _repair_location_code_after_validation_error(
+    *,
+    location_code: str | None,
+    geo_candidates: list[str],
+    mix_location: str | None,
+) -> tuple[str | None, str | None]:
+    allowed_codes = _allowed_process_location_codes()
+    if not allowed_codes:
+        return None, "schema_allowed_codes_unavailable"
+
+    normalized = _normalize_location_code(location_code, allowed_codes)
+    if normalized:
+        return normalized, "schema_accepts_original"
+
+    _code_to_en, _code_to_zh, name_to_code = _load_location_maps()
+    seeds: list[str] = []
+    for raw in [location_code, *geo_candidates, mix_location]:
+        text = str(raw or "").strip()
+        if text and text not in seeds:
+            seeds.append(text)
+
+    # 1) Try location catalog/name lookup first, but keep only schema-allowed targets.
+    for seed in seeds:
+        looked_up = _lookup_location_code(seed, name_to_code)
+        looked_up_normalized = _normalize_location_code(looked_up, allowed_codes)
+        if looked_up_normalized:
+            return looked_up_normalized, "name_lookup"
+
+    # 2) Try token decomposition (e.g. US-CAMX -> US).
+    for seed in seeds:
+        token_candidates: list[str] = []
+        for chunk in re.split(r"[^A-Za-z0-9-]+", seed.upper()):
+            piece = chunk.strip("-")
+            if not piece:
+                continue
+            token_candidates.append(piece)
+            if "-" in piece:
+                parts = [p for p in piece.split("-") if p]
+                if parts:
+                    token_candidates.append(parts[0])
+        for token in token_candidates:
+            norm = _normalize_location_code(token, allowed_codes)
+            if norm:
+                return norm, "token_fallback"
+
+    # 3) Safe fallback.
+    if "GLO" in allowed_codes:
+        return "GLO", "fallback_glo"
+    if "CN" in allowed_codes:
+        return "CN", "fallback_cn"
+    if allowed_codes:
+        return sorted(allowed_codes)[0], "fallback_first_allowed"
+    return None, "no_fallback"
 
 
 def _compact_text(value: str, *, limit: int = 160) -> str:
@@ -7669,7 +7743,27 @@ def _build_langgraph(
                 location_kwargs: dict[str, Any] = {"location": location_code}
                 if restriction_entries:
                     location_kwargs["description_of_restrictions"] = _as_multilang_list(restriction_entries)
-                location = ProcessInformationGeographyLocationOfOperationSupplyOrProduction(**location_kwargs)
+                try:
+                    location = ProcessInformationGeographyLocationOfOperationSupplyOrProduction(**location_kwargs)
+                except Exception as exc:  # pylint: disable=broad-except
+                    repaired_code, repair_reason = _repair_location_code_after_validation_error(
+                        location_code=location_code,
+                        geo_candidates=geo_candidates,
+                        mix_location=mix_location,
+                    )
+                    if repaired_code and repaired_code != location_code:
+                        LOGGER.warning(
+                            "process_from_flow.location_code_repaired_after_validation",
+                            process_id=process_id,
+                            original_location=location_code,
+                            repaired_location=repaired_code,
+                            reason=repair_reason,
+                            error=str(exc),
+                        )
+                        location_kwargs["location"] = repaired_code
+                        location = ProcessInformationGeographyLocationOfOperationSupplyOrProduction(**location_kwargs)
+                    else:
+                        raise
                 geography = ProcessDataSetProcessInformationGeography(location_of_operation_supply_or_production=location)
                 process_info_kwargs = {
                     "data_set_information": data_set_information,
