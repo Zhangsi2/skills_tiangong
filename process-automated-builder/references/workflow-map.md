@@ -76,3 +76,9 @@
 2. Debug run: use `--stop-after <stage>`, inspect state/logs, then resume.
 3. Resume run: use `--mode langgraph --resume --run-id <id>`; flow path is read from cached state when omitted.
 4. Publish run: use `--publish-only` (optionally `--publish-flows` and `--commit`).
+
+## Preflight Chain Continuity Gate (P0)
+- Added between `enrich_exchange_amounts` and `match_flows`.
+- Builds a `chain_contract` from normalized processes (`from_pid`, `to_pid`, `reference_flow_name`).
+- Validates that each upstream `reference_flow_name` appears in downstream main inputs (input exchanges), using label-insensitive and case/whitespace-normalized matching.
+- On failure, writes structured errors in `chain_preflight.errors` (e.g., `code=missing_main_input_link`) and ends the graph early, blocking downstream matching/publish path.

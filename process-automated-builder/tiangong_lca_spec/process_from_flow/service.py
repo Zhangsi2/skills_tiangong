@@ -3782,6 +3782,8 @@ class ProcessFromFlowState(TypedDict, total=False):
     intended_applications: dict[str, dict[str, str]] | dict[str, str] | list[str]
     processes: list[dict[str, Any]]
     process_exchanges: list[dict[str, Any]]
+    chain_contract: list[dict[str, Any]]
+    chain_preflight: dict[str, Any]
     exchange_value_candidates: list[dict[str, Any]]
     exchange_values_applied: bool
     matched_process_exchanges: list[dict[str, Any]]
@@ -5812,6 +5814,109 @@ def _normalize_route_processes(
     return normalized
 
 
+def _normalize_chain_flow_name(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).strip()
+    text = re.sub(r"^f\d+\s*[:\-]\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip().lower()
+    return text
+
+
+def _build_chain_contract(processes: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    ordered = [item for item in (processes or []) if isinstance(item, dict)]
+    contract: list[dict[str, Any]] = []
+    for idx in range(len(ordered) - 1):
+        current = ordered[idx]
+        nxt = ordered[idx + 1]
+        from_pid = str(current.get("process_id") or "").strip()
+        to_pid = str(nxt.get("process_id") or "").strip()
+        reference_flow_name = str(current.get("reference_flow_name") or "").strip()
+        if not from_pid or not to_pid or not reference_flow_name:
+            continue
+        next_structure = nxt.get("structure") if isinstance(nxt.get("structure"), dict) else {}
+        expected_inputs = [
+            _strip_flow_label(value)
+            for value in _clean_string_list(next_structure.get("inputs"))
+            if _strip_flow_label(value).strip()
+        ]
+        contract.append(
+            {
+                "from_pid": from_pid,
+                "to_pid": to_pid,
+                "reference_flow_name": reference_flow_name,
+                "expected_next_inputs": expected_inputs,
+            }
+        )
+    return contract
+
+
+def _collect_process_input_names(process_exchanges: list[dict[str, Any]] | None) -> dict[str, set[str]]:
+    index: dict[str, set[str]] = {}
+    for proc in process_exchanges or []:
+        if not isinstance(proc, dict):
+            continue
+        process_id = str(proc.get("process_id") or "").strip()
+        if not process_id:
+            continue
+        inputs = index.setdefault(process_id, set())
+        exchanges = proc.get("exchanges") if isinstance(proc.get("exchanges"), list) else []
+        for exchange in exchanges:
+            if not isinstance(exchange, dict):
+                continue
+            direction = str(exchange.get("exchangeDirection") or "").strip().lower()
+            if direction != "input":
+                continue
+            name = _normalize_chain_flow_name(str(exchange.get("exchangeName") or ""))
+            if name:
+                inputs.add(name)
+    return index
+
+
+def _run_chain_preflight(
+    *,
+    chain_contract: list[dict[str, Any]] | None,
+    process_exchanges: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    contract = [item for item in (chain_contract or []) if isinstance(item, dict)]
+    process_inputs = _collect_process_input_names(process_exchanges)
+    errors: list[dict[str, Any]] = []
+    checks: list[dict[str, Any]] = []
+    for item in contract:
+        from_pid = str(item.get("from_pid") or "").strip()
+        to_pid = str(item.get("to_pid") or "").strip()
+        ref_name = str(item.get("reference_flow_name") or "").strip()
+        ref_key = _normalize_chain_flow_name(ref_name)
+        next_inputs = process_inputs.get(to_pid, set())
+        passed = bool(ref_key and ref_key in next_inputs)
+        checks.append(
+            {
+                "from_pid": from_pid,
+                "to_pid": to_pid,
+                "reference_flow_name": ref_name,
+                "status": "ok" if passed else "missing",
+            }
+        )
+        if passed:
+            continue
+        errors.append(
+            {
+                "code": "missing_main_input_link",
+                "from_pid": from_pid,
+                "to_pid": to_pid,
+                "reference_flow_name": ref_name,
+            }
+        )
+    return {
+        "status": "failed" if errors else "passed",
+        "checks": checks,
+        "errors": errors,
+        "checked_pairs": len(checks),
+    }
+
+
+
+
 def _build_langgraph(
     *,
     llm: LanguageModelProtocol | None,
@@ -6087,9 +6192,13 @@ def _build_langgraph(
                     "process_routes": [default_route],
                     "selected_route_id": "R1",
                     "processes": normalized,
+                    "chain_contract": _build_chain_contract(normalized),
                     "step_markers": _update_step_markers(state, "step2"),
                 }
-            return {"step_markers": _update_step_markers(state, "step2")}
+            updates: dict[str, Any] = {"step_markers": _update_step_markers(state, "step2")}
+            if not isinstance(state.get("chain_contract"), list):
+                updates["chain_contract"] = _build_chain_contract(state.get("processes"))
+            return updates
         if llm is None:
             summary = state.get("flow_summary") or {}
             flow_name = summary.get("base_name_en") or "reference flow"
@@ -6122,6 +6231,7 @@ def _build_langgraph(
                 "processes": [process_entry],
                 "process_routes": [{"route_id": "R1", "route_name": "Default route", "processes": [process_entry]}],
                 "selected_route_id": "R1",
+                "chain_contract": _build_chain_contract([process_entry]),
                 "step_markers": _update_step_markers(state, "step2"),
             }
         # Search for scientific references for process splitting
@@ -6263,6 +6373,7 @@ def _build_langgraph(
                 "process_routes": cleaned_routes,
                 "selected_route_id": selected_route_id,
                 "processes": processes,
+                "chain_contract": _build_chain_contract(processes),
                 "scientific_references": scientific_references,
                 "step_markers": _update_step_markers(state, "step2"),
             }
@@ -6303,6 +6414,7 @@ def _build_langgraph(
                 proc["is_reference_flow_process"] = False
         return {
             "processes": cleaned,
+            "chain_contract": _build_chain_contract(cleaned),
             "scientific_references": scientific_references,
             "step_markers": _update_step_markers(state, "step2"),
         }
@@ -6729,6 +6841,20 @@ def _build_langgraph(
             "exchange_values_applied": True,
             "scientific_references": scientific_references,
         }
+
+    def preflight_chain_continuity(state: ProcessFromFlowState) -> ProcessFromFlowState:
+        chain_contract = state.get("chain_contract") if isinstance(state.get("chain_contract"), list) else _build_chain_contract(state.get("processes"))
+        preflight = _run_chain_preflight(
+            chain_contract=chain_contract,
+            process_exchanges=state.get("process_exchanges"),
+        )
+        updates: dict[str, Any] = {
+            "chain_contract": chain_contract,
+            "chain_preflight": preflight,
+        }
+        if preflight.get("status") == "failed":
+            LOGGER.warning("process_from_flow.chain_preflight_failed", errors=preflight.get("errors"), checked_pairs=preflight.get("checked_pairs"))
+        return updates
 
     def match_flows(state: ProcessFromFlowState) -> ProcessFromFlowState:
         if state.get("matched_process_exchanges"):
@@ -8649,6 +8775,7 @@ def _build_langgraph(
     graph.add_node("split_processes", split_processes)
     graph.add_node("generate_exchanges", generate_exchanges)
     graph.add_node("enrich_exchange_amounts", enrich_exchange_amounts)
+    graph.add_node("preflight_chain_continuity", preflight_chain_continuity)
     graph.add_node("match_flows", match_flows)
     graph.add_node("align_exchange_units", align_exchange_units)
     graph.add_node("density_conversion", density_conversion)
@@ -8675,7 +8802,11 @@ def _build_langgraph(
     )
     graph.add_conditional_edges(
         "enrich_exchange_amounts",
-        lambda state: END if (str(state.get("stop_after") or "").strip().lower() == "exchanges") else "match_flows",
+        lambda state: END if (str(state.get("stop_after") or "").strip().lower() == "exchanges") else "preflight_chain_continuity",
+    )
+    graph.add_conditional_edges(
+        "preflight_chain_continuity",
+        lambda state: END if (isinstance(state.get("chain_preflight"), dict) and str((state.get("chain_preflight") or {}).get("status") or "").strip().lower() == "failed") else "match_flows",
     )
     graph.add_conditional_edges(
         "match_flows",
