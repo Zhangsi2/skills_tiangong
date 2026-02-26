@@ -32,8 +32,20 @@ from tiangong_lca_spec.tidas.flow_property_registry import (
 LOGGER = get_logger(__name__)
 
 DATABASE_TOOL_NAME = "Database_CRUD_Tool"
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-PRODUCT_CATEGORY_SCRIPT = PROJECT_ROOT / "scripts" / "md" / "list_product_flow_category_children.py"
+_PROJECT_ROOT_OVERRIDE = (os.getenv("PAB_PROJECT_ROOT") or "").strip()
+if _PROJECT_ROOT_OVERRIDE:
+    PROJECT_ROOT = Path(_PROJECT_ROOT_OVERRIDE).expanduser()
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+_PRODUCT_CATEGORY_SCRIPT_OVERRIDE = (os.getenv("PAB_PRODUCT_CATEGORY_SCRIPT") or "").strip()
+if _PRODUCT_CATEGORY_SCRIPT_OVERRIDE:
+    _product_category_script_path = Path(_PRODUCT_CATEGORY_SCRIPT_OVERRIDE).expanduser()
+    if not _product_category_script_path.is_absolute():
+        _product_category_script_path = PROJECT_ROOT / _product_category_script_path
+    PRODUCT_CATEGORY_SCRIPT = _product_category_script_path
+else:
+    PRODUCT_CATEGORY_SCRIPT = PROJECT_ROOT / "scripts" / "md" / "list_product_flow_category_children.py"
 FLOW_TEXT_PROMPT = (
     "You generate bilingual ILCD flow text fields for Tiangong LCA.\n"
     "Use the provided exchange, flow search hints, and candidate metadata to fill missing values. "
