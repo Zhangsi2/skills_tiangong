@@ -32,6 +32,10 @@ class OpenAIResponsesLLM:
         cache_dir: Path | None = Path("artifacts/cache/openai"),
         use_cache: bool = True,
         base_url: str | None = None,
+        run_id: str | None = None,
+        module: str = "unknown",
+        stage: str = "unknown",
+        trace_path: Path | None = None,
     ) -> None:
         try:
             from openai import APIConnectionError, APIStatusError, OpenAI
@@ -49,6 +53,56 @@ class OpenAIResponsesLLM:
         self._cache_dir = Path(cache_dir) if use_cache and cache_dir else None
         if self._cache_dir:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
+        env_run_id = (os.getenv("TIANGONG_PFF_RUN_ID") or "").strip()
+        self._run_id = (run_id or env_run_id or "unknown").strip() or "unknown"
+        self._module = module
+        self._stage = stage
+        self._trace_path = self._resolve_trace_path(trace_path)
+
+    def _resolve_trace_path(self, trace_path: Path | None) -> Path | None:
+        if trace_path is not None:
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            return trace_path
+        env_trace = (os.getenv("TIANGONG_PFF_LLM_TRACE_PATH") or "").strip()
+        if env_trace:
+            target = Path(env_trace)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            return target
+        if self._run_id and self._run_id != "unknown":
+            target = Path("artifacts") / "process_from_flow" / self._run_id / "cache" / "llm_log.jsonl"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            return target
+        return None
+
+    def _append_trace(
+        self,
+        *,
+        digest: str,
+        cache_hit: bool,
+        status: str,
+        latency_ms: float,
+        error: str | None = None,
+    ) -> None:
+        if not self._trace_path:
+            return
+        record: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "run_id": self._run_id,
+            "stage": self._stage,
+            "module": self._module,
+            "prompt_hash": digest,
+            "latency_ms": round(latency_ms, 2),
+            "cache_hit": cache_hit,
+            "status": status,
+            "model": self._model,
+        }
+        if error:
+            record["error"] = error[:500]
+        try:
+            with self._trace_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:
+            return
 
     def invoke(self, input_data: dict[str, Any]) -> str:
         prompt = input_data.get("prompt") or ""
@@ -69,8 +123,18 @@ class OpenAIResponsesLLM:
             text_options["format"] = response_format
 
         cache_path = self._cache_lookup(payload, text_options)
+        digest = cache_path.stem if cache_path else hashlib.sha256(
+            json.dumps({"payload": payload, "text_options": text_options}, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        started = time.monotonic()
         if cache_path and cache_path.exists():
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            self._append_trace(
+                digest=digest,
+                cache_hit=True,
+                status="ok",
+                latency_ms=(time.monotonic() - started) * 1000,
+            )
             return cached["output"]
 
         last_error: Exception | None = None
@@ -83,10 +147,23 @@ class OpenAIResponsesLLM:
                 output = self._extract_output(response)
                 if cache_path:
                     self._cache_store(cache_path, {"output": output})
+                self._append_trace(
+                    digest=digest,
+                    cache_hit=False,
+                    status="ok",
+                    latency_ms=(time.monotonic() - started) * 1000,
+                )
                 return output
             except (self._api_connection_error_cls, self._api_status_error_cls) as exc:
                 last_error = exc
                 if attempt == 2:
+                    self._append_trace(
+                        digest=digest,
+                        cache_hit=False,
+                        status="error",
+                        latency_ms=(time.monotonic() - started) * 1000,
+                        error=str(exc),
+                    )
                     raise
                 time.sleep(5 * (attempt + 1))
         if last_error:
