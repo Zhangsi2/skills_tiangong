@@ -66,6 +66,24 @@ process-automated-builder/scripts/run-process-automated-builder.sh \
   -- --publish-only --run-id <run_id> --commit
 ```
 
+Optional debug switches during publish:
+- `--skip-flow-auto-build`
+- `--skip-process-update`
+
+## 7b) Run flow-auto-build Only
+```bash
+process-automated-builder/scripts/run-process-automated-builder.sh \
+  --mode langgraph \
+  -- flow-auto-build --run-id <run_id>
+```
+
+## 7c) Run process-update Only
+```bash
+process-automated-builder/scripts/run-process-automated-builder.sh \
+  --mode langgraph \
+  -- process-update --run-id <run_id>
+```
+
 ## 8) Background Persistent Run (systemd user service)
 ```bash
 # install service + default env template
@@ -90,11 +108,14 @@ Notes:
 ## Runtime Notes
 - New runs require flow input; no default flow file is used.
 - Resume mode can omit `--flow` and read it from cached state.
+- `flow-auto-build` and `process-update` subcommands also do not require `--flow`.
 - Flow-search MCP configuration is read from `TIANGONG_LCA_REMOTE_*` env vars.
 - OpenAI configuration is read from `OPENAI_*` (or `LCA_OPENAI_*`) env vars.
 - Literature MCP (`TianGong_KB_Remote`) can be configured by `TIANGONG_KB_REMOTE_*` env vars.
-- MinerU OCR client can be configured by `TIANGONG_MINERU_WITH_IMAGE_*` env vars.
+- MinerU OCR client can be configured by `TIANGONG_MINERU_WITH_IMAGE_*` env vars (`TIANGONG_MINERU_WITH_IMAGE_RETURN_TXT` defaults to `true`).
 - `--publish` and `--commit` may invoke remote CRUD services; use dry-run first.
+- `--publish` / `--publish-only` now execute one sequence: `flow-auto-build -> process-update -> flow publish -> process publish -> source publish`.
+- Method-policy auto-repair is enabled by default in flow-auto-build/process-update/publish paths; see `cache/method_policy_autofix_report.json` for deterministic fixes, retry attempts, and any `manual_required` residue.
 
 ## Parallel Orchestration Rules
 - Run-level parallel (recommended):

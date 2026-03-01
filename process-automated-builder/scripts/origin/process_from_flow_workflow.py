@@ -66,8 +66,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--auto-balance-revise",
+        dest="auto_balance_revise",
         action="store_true",
-        help=("After the first balance review, auto-revise severe core-mass imbalances " "on non-reference exchanges, then recompute balance review."),
+        help=("Enable auto-revision after the first balance review: revise severe core-mass " "imbalances on non-reference exchanges, then recompute balance review (default: enabled)."),
+    )
+    parser.add_argument(
+        "--no-auto-balance-revise",
+        dest="auto_balance_revise",
+        action="store_false",
+        help="Disable auto-revision after balance review.",
     )
     parser.add_argument("--min-si-hint", default="possible", help="Min si_hint to download (none|possible|likely).")
     parser.add_argument("--si-max-links", type=int, help="Max SI links per DOI.")
@@ -76,25 +83,13 @@ def parse_args() -> argparse.Namespace:
         "--publish",
         dest="publish",
         action="store_true",
-        help="Publish generated process datasets after completion (default: enabled).",
+        help="Publish generated flow/process/source datasets after completion (default: enabled).",
     )
     parser.add_argument(
         "--no-publish",
         dest="publish",
         action="store_false",
         help="Disable publishing and keep outputs local under exports/.",
-    )
-    parser.add_argument(
-        "--publish-flows",
-        dest="publish_flows",
-        action="store_true",
-        help="Also publish placeholder flow datasets (default: enabled).",
-    )
-    parser.add_argument(
-        "--no-publish-flows",
-        dest="publish_flows",
-        action="store_false",
-        help="Disable placeholder flow publishing.",
     )
     parser.add_argument(
         "--commit",
@@ -108,7 +103,17 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="Publish in dry-run mode without remote commit.",
     )
-    parser.set_defaults(publish=True, publish_flows=True, commit=True)
+    parser.add_argument(
+        "--skip-flow-auto-build",
+        action="store_true",
+        help="Skip flow-auto-build during publish (debug only).",
+    )
+    parser.add_argument(
+        "--skip-process-update",
+        action="store_true",
+        help="Skip process-update during publish (debug only).",
+    )
+    parser.set_defaults(publish=True, commit=True, auto_balance_revise=True)
     parser.add_argument(
         "--stop-after",
         choices=("references", "tech", "processes", "exchanges", "matches", "sources", "datasets"),
@@ -170,6 +175,8 @@ def _run_reference_stage(args: argparse.Namespace, run_id: str, *, log_path: Pat
         cmd.append("--allow-density-conversion")
     if args.auto_balance_revise:
         cmd.append("--auto-balance-revise")
+    else:
+        cmd.append("--no-auto-balance-revise")
     _run_python(script, cmd, log_path=log_path)
 
 
@@ -258,12 +265,16 @@ def _run_main_pipeline(args: argparse.Namespace, run_id: str, *, log_path: Path 
         cmd.append("--allow-density-conversion")
     if args.auto_balance_revise:
         cmd.append("--auto-balance-revise")
+    else:
+        cmd.append("--no-auto-balance-revise")
     if args.stop_after:
         cmd.extend(["--stop-after", args.stop_after])
     if args.publish:
         cmd.append("--publish")
-    if args.publish_flows:
-        cmd.append("--publish-flows")
+        if args.skip_flow_auto_build:
+            cmd.append("--skip-flow-auto-build")
+        if args.skip_process_update:
+            cmd.append("--skip-process-update")
     if args.commit:
         cmd.append("--commit")
     _run_python(script, cmd, log_path=log_path)

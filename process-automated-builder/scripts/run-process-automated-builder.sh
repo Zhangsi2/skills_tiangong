@@ -33,7 +33,7 @@ Wrapper options:
 
 Notes:
   - For new runs, flow input is required.
-  - For langgraph resume/publish-only/cleanup-only modes, flow input can be omitted.
+  - For langgraph resume/publish-only/cleanup-only/flow-auto-build/process-update modes, flow input can be omitted.
   - Any unrecognized arguments are forwarded to the selected Python entry script.
 USAGE
 }
@@ -137,6 +137,7 @@ fi
 TARGET_SCRIPT=""
 REQUIRE_FLOW=1
 FORWARDED_HAS_FLOW=0
+LANGGRAPH_SUBCOMMAND=""
 if has_flag "--flow" "${FORWARD_ARGS[@]}"; then
   FORWARDED_HAS_FLOW=1
 fi
@@ -145,6 +146,14 @@ if [[ "${MODE}" == "workflow" ]]; then
   TARGET_SCRIPT="${SKILL_DIR}/scripts/origin/process_from_flow_workflow.py"
 else
   TARGET_SCRIPT="${SKILL_DIR}/scripts/origin/process_from_flow_langgraph.py"
+  if [[ ${#FORWARD_ARGS[@]} -gt 0 ]]; then
+    case "${FORWARD_ARGS[0]}" in
+      flow-auto-build|process-update)
+        LANGGRAPH_SUBCOMMAND="${FORWARD_ARGS[0]}"
+        REQUIRE_FLOW=0
+        ;;
+    esac
+  fi
   if has_flag "--resume" "${FORWARD_ARGS[@]}" || has_flag "--publish-only" "${FORWARD_ARGS[@]}" || has_flag "--cleanup-only" "${FORWARD_ARGS[@]}"; then
     REQUIRE_FLOW=0
   fi
@@ -155,10 +164,16 @@ if [[ "${REQUIRE_FLOW}" -eq 1 && -z "${FLOW_FILE}" && "${FORWARDED_HAS_FLOW}" -e
 fi
 
 FLOW_ARG=()
-if [[ -n "${FLOW_FILE}" ]]; then
+if [[ -n "${LANGGRAPH_SUBCOMMAND}" && -n "${FLOW_FILE}" ]]; then
+  fail "Flow input is not used for langgraph subcommands (${LANGGRAPH_SUBCOMMAND}); remove --flow-file/--flow-json/--flow-stdin."
+fi
+if [[ -z "${LANGGRAPH_SUBCOMMAND}" && -n "${FLOW_FILE}" ]]; then
   FLOW_ARG=(--flow "${FLOW_FILE}")
 fi
 
 export PYTHONPATH="${SKILL_DIR}:${PYTHONPATH:-}"
 
+if [[ -n "${LANGGRAPH_SUBCOMMAND}" ]]; then
+  exec "${PYTHON_BIN}" "${TARGET_SCRIPT}" "${FORWARD_ARGS[@]}"
+fi
 exec "${PYTHON_BIN}" "${TARGET_SCRIPT}" "${FLOW_ARG[@]}" "${FORWARD_ARGS[@]}"

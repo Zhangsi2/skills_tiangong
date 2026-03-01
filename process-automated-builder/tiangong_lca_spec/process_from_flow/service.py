@@ -157,6 +157,23 @@ _UNIT_GROUP_DIR = _REPO_ROOT / "input_data" / "units"
 _PFF_RUNTIME_STATE_PATH_ENV = "TIANGONG_PFF_STATE_PATH"
 _PFF_RUNTIME_RUN_ID_ENV = "TIANGONG_PFF_RUN_ID"
 _PFF_RUNTIME_ARTIFACTS_ROOT = Path("artifacts/process_from_flow")
+_ILCD_GUARDRAILS_PATH = _REPO_ROOT / "references" / "ilcd_method_guardrails.md"
+
+
+@lru_cache(maxsize=1)
+def _load_ilcd_guardrails_excerpt(*, max_chars: int = 2600) -> str:
+    """Load lightweight ILCD guardrails excerpt for prompt-time policy grounding."""
+
+    try:
+        text = _ILCD_GUARDRAILS_PATH.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    compact = "\n".join(line.rstrip() for line in text.splitlines())
+    if len(compact) > max_chars:
+        compact = compact[:max_chars].rstrip() + "\n..."
+    return compact
 
 
 @dataclass(frozen=True, slots=True)
@@ -1928,22 +1945,40 @@ def _load_si_snippets(scientific_references: dict[str, Any]) -> list[dict[str, A
     for entry in entries:
         if not isinstance(entry, dict):
             continue
+        doi = str(entry.get("doi") or "").strip() or None
+        snippet = ""
+        source_path = ""
+
         output_path = entry.get("output_path")
-        if not isinstance(output_path, str) or not output_path.strip():
-            continue
-        path = Path(output_path)
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        blocks = _extract_mineru_text_blocks(payload, max_blocks=SI_SNIPPET_MAX_BLOCKS)
-        snippet = _collect_snippet(blocks, max_chars=SI_SNIPPET_MAX_CHARS)
+        if isinstance(output_path, str) and output_path.strip():
+            path = Path(output_path)
+            if path.exists():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    payload = None
+                if payload is not None:
+                    blocks = _extract_mineru_text_blocks(payload, max_blocks=SI_SNIPPET_MAX_BLOCKS)
+                    snippet = _collect_snippet(blocks, max_chars=SI_SNIPPET_MAX_CHARS)
+                    if snippet:
+                        source_path = str(path)
+
+        if not snippet:
+            output_text_path = entry.get("output_text_path") or entry.get("text_output_path")
+            if isinstance(output_text_path, str) and output_text_path.strip():
+                text_path = Path(output_text_path)
+                if text_path.exists():
+                    try:
+                        raw_text = text_path.read_text(encoding="utf-8")
+                    except OSError:
+                        raw_text = ""
+                    snippet = _collect_snippet([raw_text], max_chars=SI_SNIPPET_MAX_CHARS)
+                    if snippet:
+                        source_path = str(text_path)
+
         if not snippet:
             continue
-        doi = str(entry.get("doi") or "").strip() or None
-        add_candidate(doi, snippet, str(path), source_type="mineru", source_rank=3)
+        add_candidate(doi, snippet, source_path, source_type="mineru", source_rank=3)
 
     for entry in _iter_si_text_entries(scientific_references):
         doi = str(entry.get("doi") or "").strip() or None
@@ -7163,10 +7198,22 @@ def _build_langgraph(
                 references_text = _format_references_for_prompt(references)
         reference_clusters = _reference_clusters(scientific_references) if use_references else None
 
-        # Build enhanced prompt with references
+        # Build enhanced prompt with references + ILCD method guardrails
         enhanced_prompt = PROCESS_SPLIT_PROMPT
         if references_text:
-            enhanced_prompt = f"{PROCESS_SPLIT_PROMPT}\n\n" f"Use the following scientific references to identify and split unit processes:\n" f"{references_text}\n"
+            enhanced_prompt = (
+                f"{PROCESS_SPLIT_PROMPT}\n\n"
+                f"Use the following scientific references to identify and split unit processes:\n"
+                f"{references_text}\n"
+            )
+        guardrails_text = _load_ilcd_guardrails_excerpt()
+        if guardrails_text:
+            enhanced_prompt = (
+                f"{enhanced_prompt}\n\n"
+                "Apply the following ILCD method guardrails (database-building context). "
+                "Treat these as hard policy constraints whenever they conflict with weak assumptions:\n"
+                f"{guardrails_text}\n"
+            )
 
         payload = {
             "prompt": enhanced_prompt,
@@ -7430,10 +7477,22 @@ def _build_langgraph(
                 references_text = _format_references_for_prompt(references)
         reference_clusters = _reference_clusters(scientific_references) if use_references else None
 
-        # Build enhanced prompt with references
+        # Build enhanced prompt with references + ILCD method guardrails
         enhanced_prompt = EXCHANGES_PROMPT
         if references_text:
-            enhanced_prompt = f"{EXCHANGES_PROMPT}\n\n" f"Use the following scientific references to confirm exchange flow names and amounts:\n" f"{references_text}\n"
+            enhanced_prompt = (
+                f"{EXCHANGES_PROMPT}\n\n"
+                f"Use the following scientific references to confirm exchange flow names and amounts:\n"
+                f"{references_text}\n"
+            )
+        guardrails_text = _load_ilcd_guardrails_excerpt()
+        if guardrails_text:
+            enhanced_prompt = (
+                f"{enhanced_prompt}\n\n"
+                "Apply the following ILCD method guardrails for basis consistency and comparability "
+                "before finalizing exchange units/amounts:\n"
+                f"{guardrails_text}\n"
+            )
 
         payload = {
             "prompt": enhanced_prompt,
