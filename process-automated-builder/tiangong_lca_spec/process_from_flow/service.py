@@ -205,6 +205,10 @@ _REFERENCE_OUTPUT_DEFAULT_POLICY: dict[str, Any] = {
             "photochemical",
         ],
     },
+    "impact_flow_property_ids": [
+        "585d3441-af58-49c9-a5c2-1d1e5b63f8d5",
+        "f65d356a-d702-4d79-850e-dd68b47bbcd9",
+    ],
     "reference_unit_overrides": [],
 }
 
@@ -279,6 +283,17 @@ class UnitGroupInfo:
 class FlowReferenceInfo:
     flow_property_id: str | None
     unit_group: UnitGroupInfo | None
+
+
+@dataclass(frozen=True, slots=True)
+class FlowPropertyUnitRegistryEntry:
+    flow_property_id: str
+    flow_property_name: str
+    unit_group_id: str | None
+    unit_group_name: str | None
+    reference_unit: str | None
+    allowed_units: tuple[str, ...]
+    dimension: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2201,6 +2216,8 @@ _UNIT_DIMENSIONS: dict[str, tuple[str, float]] = {
     "pieces": ("items", 1.0),
     "pc": ("items", 1.0),
     "pcs": ("items", 1.0),
+    "item(s)": ("items", 1.0),
+    "dozen(s)": ("items", 12.0),
     "ea": ("items", 1.0),
     "unit": ("items", 1.0),
     "units": ("items", 1.0),
@@ -2369,6 +2386,53 @@ def _flow_reference_info_from_dataset(flow_dataset: dict[str, Any] | None) -> Fl
     return FlowReferenceInfo(flow_property_id=flow_property_id, unit_group=unit_group)
 
 
+def _dataset_ids_from_directory(directory: Path) -> list[str]:
+    if not directory.exists():
+        return []
+    identifiers: set[str] = set()
+    for path in directory.glob("*.json"):
+        stem = path.stem
+        token = stem.split("_", 1)[0].strip()
+        if token:
+            identifiers.add(token)
+    return sorted(identifiers)
+
+
+@lru_cache(maxsize=1)
+def _load_flow_property_unit_registry() -> dict[str, FlowPropertyUnitRegistryEntry]:
+    registry: dict[str, FlowPropertyUnitRegistryEntry] = {}
+    for flow_property_id in _dataset_ids_from_directory(_FLOWPROPERTY_DIR):
+        flow_property = _get_flow_property_info(flow_property_id)
+        if not flow_property:
+            continue
+        unit_group = _get_unit_group_info(flow_property.unit_group_id) if flow_property.unit_group_id else None
+        allowed_units = tuple(sorted((unit_group.units or {}).keys())) if unit_group else ()
+        reference_unit = unit_group.reference_unit if unit_group else None
+        registry[flow_property_id] = FlowPropertyUnitRegistryEntry(
+            flow_property_id=flow_property.flow_property_id,
+            flow_property_name=flow_property.name,
+            unit_group_id=flow_property.unit_group_id,
+            unit_group_name=unit_group.name if unit_group else None,
+            reference_unit=reference_unit,
+            allowed_units=allowed_units,
+            dimension=_unit_group_category(unit_group),
+        )
+    return registry
+
+
+def _flow_property_registry_entry(
+    flow_property_id: str | None,
+    *,
+    registry: dict[str, FlowPropertyUnitRegistryEntry] | None = None,
+) -> FlowPropertyUnitRegistryEntry | None:
+    token = str(flow_property_id or "").strip()
+    if not token:
+        return None
+    if isinstance(registry, dict):
+        return registry.get(token)
+    return _load_flow_property_unit_registry().get(token)
+
+
 def _convert_amount_with_unit_group(amount: float, unit: str, unit_group: UnitGroupInfo) -> float | None:
     unit_key = _normalize_unit_token(unit)
     if not unit_key:
@@ -2379,36 +2443,38 @@ def _convert_amount_with_unit_group(amount: float, unit: str, unit_group: UnitGr
     return amount * factor
 
 
-def _unit_group_dimension(unit_group: UnitGroupInfo | None) -> str | None:
-    if not unit_group or not unit_group.name:
+_UNIT_GROUP_CATEGORY_BY_NAME: dict[str, str] = {
+    "units of mass": "mass",
+    "units of energy": "energy",
+    "units of volume": "volume",
+    "units of items": "items",
+    "units of area": "area",
+    "units of length": "length",
+    "units of mole": "mole",
+    "units of radioactivity": "radioactivity",
+    "units of mass*time": "mass_time",
+    "units of area*time": "area_time",
+    "units of volume*time": "volume_time",
+    "unit of kg*km": "mass_distance",
+    "unit of currency": "currency",
+    "sej": "sej",
+}
+
+
+def _unit_group_name_to_category(name: str | None) -> str | None:
+    if not name:
         return None
-    name = unit_group.name.strip().lower()
-    if name == "units of mass":
-        return "mass"
-    if name == "units of energy":
-        return "energy"
-    return None
+    normalized = re.sub(r"\s+", " ", str(name).strip().lower())
+    return _UNIT_GROUP_CATEGORY_BY_NAME.get(normalized)
+
+
+def _unit_group_dimension(unit_group: UnitGroupInfo | None) -> str | None:
+    category = _unit_group_name_to_category(unit_group.name if unit_group else None)
+    return category if category in {"mass", "energy"} else None
 
 
 def _unit_group_category(unit_group: UnitGroupInfo | None) -> str | None:
-    if not unit_group or not unit_group.name:
-        return None
-    name = unit_group.name.strip().lower()
-    if name == "units of mass":
-        return "mass"
-    if name == "units of energy":
-        return "energy"
-    if name == "units of volume":
-        return "volume"
-    if name == "units of items":
-        return "items"
-    if name == "units of area":
-        return "area"
-    if name == "units of length":
-        return "length"
-    if name == "units of mole":
-        return "mole"
-    return None
+    return _unit_group_name_to_category(unit_group.name if unit_group else None)
 
 
 def _unit_dimension_from_unit(unit: str | None) -> str | None:
@@ -5687,6 +5753,181 @@ def _lcia_name_keywords(policy: dict[str, Any] | None = None) -> list[str]:
     return [str(item).strip().lower() for item in values if str(item).strip()]
 
 
+def _lcia_flow_property_ids(policy: dict[str, Any] | None = None) -> set[str]:
+    values = (policy or {}).get("impact_flow_property_ids") if isinstance(policy, dict) else None
+    if not isinstance(values, list):
+        return set()
+    return {str(item).strip() for item in values if str(item).strip()}
+
+
+def _is_lcia_impact_flow_property(
+    flow_property_id: str | None,
+    *,
+    flow_property_name: str | None = None,
+    policy: dict[str, Any] | None = None,
+) -> bool:
+    token = str(flow_property_id or "").strip()
+    if token and token in _lcia_flow_property_ids(policy):
+        return True
+    return _is_lcia_impact_name(flow_property_name, policy)
+
+
+def _append_reference_validation_violation(
+    violations: list[dict[str, Any]],
+    *,
+    code: str,
+    message: str,
+    hold: bool = False,
+    details: dict[str, Any] | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "code": str(code).strip() or "reference_output_violation",
+        "message": str(message).strip() or "Reference-output validation violation.",
+        "hold": bool(hold),
+    }
+    if isinstance(details, dict) and details:
+        payload["details"] = details
+    violations.append(payload)
+
+
+def validate_reference_output_decision(
+    *,
+    stage: str,
+    unit: str | None,
+    policy: dict[str, Any] | None,
+    registry: dict[str, FlowPropertyUnitRegistryEntry] | None = None,
+    flow_property_id: str | None = None,
+    flow_property_name: str | None = None,
+    exchange_name: str | None = None,
+    flow_name: str | None = None,
+    flow_type: str | None = None,
+    is_reference_flow: bool = False,
+    is_product_or_waste: bool | None = None,
+    confidence: float | None = None,
+    chain_conflict: bool = False,
+) -> dict[str, Any]:
+    policy_payload = policy if isinstance(policy, dict) else _load_reference_output_policy()
+    registry_map = registry if isinstance(registry, dict) else _load_flow_property_unit_registry()
+    entry = _flow_property_registry_entry(flow_property_id, registry=registry_map)
+    normalized_unit = _canonical_reference_unit(unit) or str(unit or "").strip() or None
+    normalized_unit_token = _normalize_unit_token(normalized_unit)
+    recommended_unit: str | None = None
+    violations: list[dict[str, Any]] = []
+
+    allowed_unit_tokens = set(entry.allowed_units) if entry else set()
+    if entry and entry.dimension == "items":
+        allowed_unit_tokens.update({"unit", "units", "item", "items", "item(s)", "dozen(s)", "piece", "pieces", "pc", "pcs", "ea"})
+    if entry and allowed_unit_tokens and normalized_unit_token and normalized_unit_token not in allowed_unit_tokens:
+        recommended_unit = _canonical_reference_unit(entry.reference_unit) or entry.reference_unit
+        _append_reference_validation_violation(
+            violations,
+            code="unit_group_mismatch",
+            message="Unit is not in the flow-property unit group; corrected to the unit-group reference unit when possible.",
+            hold=False,
+            details={
+                "stage": stage,
+                "unit": normalized_unit,
+                "flow_property_id": entry.flow_property_id,
+                "unit_group_id": entry.unit_group_id,
+                "unit_group_name": entry.unit_group_name,
+                "allowed_units": sorted(allowed_unit_tokens),
+                "recommended_unit": recommended_unit,
+            },
+        )
+
+    normalized_flow_type = _normalize_flow_type(flow_type)
+    target_is_product_or_waste = (
+        bool(is_product_or_waste)
+        if is_product_or_waste is not None
+        else bool(is_reference_flow or normalized_flow_type in {"product", "waste"})
+    )
+    target_name = str(exchange_name or flow_name or flow_property_name or "").strip()
+    resolved_property_name = str(flow_property_name or (entry.flow_property_name if entry else "")).strip() or None
+
+    if target_is_product_or_waste and _is_lcia_impact_flow_property(
+        flow_property_id,
+        flow_property_name=resolved_property_name,
+        policy=policy_payload,
+    ):
+        _append_reference_validation_violation(
+            violations,
+            code="lcia_on_product_waste_property",
+            message="Product/waste reference output cannot use LCIA impact flow properties.",
+            hold=False,
+            details={
+                "stage": stage,
+                "flow_property_id": str(flow_property_id or "").strip() or None,
+                "flow_property_name": resolved_property_name,
+            },
+        )
+        if entry and entry.reference_unit:
+            recommended_unit = _canonical_reference_unit(entry.reference_unit) or entry.reference_unit
+
+    if target_is_product_or_waste and _is_lcia_impact_unit(normalized_unit, policy_payload):
+        _append_reference_validation_violation(
+            violations,
+            code="lcia_on_product_waste_unit",
+            message="Product/waste reference output cannot use LCIA impact units.",
+            hold=False,
+            details={"stage": stage, "unit": normalized_unit},
+        )
+        if entry and entry.reference_unit:
+            recommended_unit = _canonical_reference_unit(entry.reference_unit) or entry.reference_unit
+        elif not recommended_unit:
+            recommended_unit = _reference_output_fallback_unit(policy_payload)
+
+    if target_is_product_or_waste and _is_lcia_impact_name(target_name, policy_payload):
+        _append_reference_validation_violation(
+            violations,
+            code="lcia_on_product_waste_name",
+            message="Product/waste reference output naming indicates LCIA impact semantics.",
+            hold=False,
+            details={"stage": stage, "name": target_name or None},
+        )
+
+    confidence_value = _coerce_confidence(confidence)
+    low_conf_threshold = float(
+        (((policy_payload.get("reference_output") if isinstance(policy_payload.get("reference_output"), dict) else {}) or {}).get("low_confidence_threshold") or 0.45)
+    )
+    low_confidence = confidence_value is not None and confidence_value < low_conf_threshold
+    if low_confidence:
+        _append_reference_validation_violation(
+            violations,
+            code="low_confidence_hold",
+            message="Reference-output decision confidence is below hold threshold.",
+            hold=True,
+            details={
+                "stage": stage,
+                "confidence": confidence_value,
+                "low_confidence_threshold": low_conf_threshold,
+            },
+        )
+
+    if chain_conflict:
+        _append_reference_validation_violation(
+            violations,
+            code="chain_conflict_hold",
+            message="Severe chain conflict detected for reference-output decision.",
+            hold=True,
+            details={"stage": stage},
+        )
+
+    return {
+        "stage": stage,
+        "unit": normalized_unit,
+        "recommended_unit": recommended_unit,
+        "flow_property_id": entry.flow_property_id if entry else (str(flow_property_id or "").strip() or None),
+        "flow_property_name": entry.flow_property_name if entry else resolved_property_name,
+        "unit_group_id": entry.unit_group_id if entry else None,
+        "unit_group_name": entry.unit_group_name if entry else None,
+        "allowed_units": sorted(allowed_unit_tokens) if entry else [],
+        "dimension": entry.dimension if entry else None,
+        "violations": violations,
+        "hold": any(bool(item.get("hold")) for item in violations),
+        "low_confidence": low_confidence,
+    }
+
+
 def _is_lcia_impact_unit(unit: str | None, policy: dict[str, Any] | None = None) -> bool:
     token = _normalize_unit_token(unit)
     if not token:
@@ -5706,7 +5947,7 @@ def _is_lcia_impact_name(name: str | None, policy: dict[str, Any] | None = None)
 
 def _is_count_style_unit(unit: str | None) -> bool:
     token = _normalize_unit_token(unit)
-    return token in {"unit", "units", "item", "items", "piece", "pieces", "pc", "pcs", "ea", "count", "set", "batch"}
+    return token in {"unit", "units", "item", "items", "item(s)", "dozen(s)", "piece", "pieces", "pc", "pcs", "ea", "count", "set", "batch"}
 
 
 def _is_physical_reference_unit(unit: str | None) -> bool:
@@ -6437,6 +6678,14 @@ def _reference_unit_from_flow_dataset(flow_dataset: dict[str, Any] | None) -> st
     return _canonical_reference_unit(info.unit_group.reference_unit)
 
 
+def _flow_property_id_from_flow_dataset(flow_dataset: dict[str, Any] | None) -> str | None:
+    info = _flow_reference_info_from_dataset(flow_dataset)
+    if not info:
+        return None
+    token = str(info.flow_property_id or "").strip()
+    return token or None
+
+
 def _reference_output_overrides(policy: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(policy, dict):
         return []
@@ -6712,6 +6961,8 @@ def _apply_reference_output_unit_policy(
     scientific_references: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     policy = _load_reference_output_policy()
+    registry = _load_flow_property_unit_registry()
+    target_flow_property_id = _flow_property_id_from_flow_dataset(flow_dataset)
     llm_decisions = _batch_decide_reference_output_units_with_llm(
         llm=llm,
         flow_summary=flow_summary,
@@ -6726,6 +6977,7 @@ def _apply_reference_output_unit_policy(
         if not isinstance(proc, dict):
             continue
         name_parts = proc.get("name_parts") if isinstance(proc.get("name_parts"), dict) else {}
+        is_reference_flow_process = bool(proc.get("is_reference_flow_process"))
         decision = _prefer_reference_output_unit(
             process=proc,
             flow_dataset=flow_dataset,
@@ -6734,6 +6986,33 @@ def _apply_reference_output_unit_policy(
             policy=policy,
         )
         reference_flow_name = str(proc.get("reference_flow_name") or "").strip() or "reference flow"
+        reference_flow_property_id = target_flow_property_id if is_reference_flow_process else None
+        validation = validate_reference_output_decision(
+            stage="step2_reference_output",
+            unit=decision.get("unit"),
+            policy=policy,
+            registry=registry,
+            flow_property_id=reference_flow_property_id,
+            flow_name=reference_flow_name,
+            is_reference_flow=True,
+            is_product_or_waste=True,
+            confidence=_coerce_confidence(decision.get("confidence")),
+        )
+        recommended_unit = _canonical_reference_unit(str(validation.get("recommended_unit") or "").strip())
+        if recommended_unit:
+            decision["unit"] = recommended_unit
+        decision_low_confidence = bool(decision.get("low_confidence")) or bool(validation.get("low_confidence"))
+        hold_codes = [
+            str(item.get("code") or "").strip()
+            for item in (validation.get("violations") if isinstance(validation.get("violations"), list) else [])
+            if isinstance(item, dict) and bool(item.get("hold"))
+        ]
+        decision["low_confidence"] = decision_low_confidence
+        decision["hold"] = bool(validation.get("hold"))
+        decision["hold_codes"] = [code for code in hold_codes if code]
+        decision["validation_violations"] = [
+            item for item in (validation.get("violations") if isinstance(validation.get("violations"), list) else []) if isinstance(item, dict)
+        ]
         quant_ref = _normalize_quantitative_reference(
             name_parts.get("quantitative_reference"),
             reference_flow_name,
@@ -6754,7 +7033,14 @@ def _apply_reference_output_unit_policy(
             "reason": decision.get("reason"),
             "assumptions": decision.get("assumptions"),
             "evidence": _clean_evidence_list(decision.get("evidence")),
-            "low_confidence": bool(decision.get("low_confidence")),
+            "low_confidence": decision_low_confidence,
+            "hold": bool(decision.get("hold")),
+            "hold_codes": decision.get("hold_codes") if isinstance(decision.get("hold_codes"), list) else [],
+            "flow_property_id": reference_flow_property_id,
+            "unit_group_id": validation.get("unit_group_id"),
+            "unit_group_name": validation.get("unit_group_name"),
+            "dimension": validation.get("dimension"),
+            "validation_violations": decision.get("validation_violations"),
         }
         decisions.append(
             {
@@ -6768,6 +7054,7 @@ def _apply_reference_output_unit_policy(
 
     fallback_unit = _reference_output_fallback_unit(policy)
     low_confidence = [item for item in decisions if bool(item.get("low_confidence"))]
+    held_processes = [item for item in decisions if bool(item.get("hold"))]
     fallback_count = sum(1 for item in decisions if _canonical_reference_unit(str(item.get("unit") or "")) == fallback_unit)
     physical_count = sum(1 for item in decisions if _is_physical_reference_unit(str(item.get("unit") or "")))
     summary = {
@@ -6776,6 +7063,7 @@ def _apply_reference_output_unit_policy(
         "physical_unit_count": physical_count,
         "fallback_unit_count": fallback_count,
         "low_confidence_count": len(low_confidence),
+        "hold_count": len(held_processes),
         "low_confidence_processes": [
             {
                 "process_id": item.get("process_id"),
@@ -6783,8 +7071,19 @@ def _apply_reference_output_unit_policy(
                 "source_tier": item.get("source_tier"),
                 "confidence": item.get("confidence"),
                 "reason": item.get("reason"),
+                "hold_codes": item.get("hold_codes"),
             }
             for item in low_confidence
+        ],
+        "held_processes": [
+            {
+                "process_id": item.get("process_id"),
+                "unit": item.get("unit"),
+                "confidence": item.get("confidence"),
+                "reason": item.get("reason"),
+                "hold_codes": item.get("hold_codes"),
+            }
+            for item in held_processes
         ],
         "decisions": decisions,
     }
@@ -6797,40 +7096,37 @@ def _reference_basis_from_process_plan(
     fallback_flow_dataset: dict[str, Any] | None,
     is_reference_flow_process: bool,
     policy: dict[str, Any] | None,
+    flow_property_id: str | None = None,
+    registry: dict[str, FlowPropertyUnitRegistryEntry] | None = None,
 ) -> tuple[str, str]:
     name_parts = process_plan.get("name_parts") if isinstance((process_plan or {}).get("name_parts"), dict) else {}
     basis = process_plan.get("reference_output_basis") if isinstance((process_plan or {}).get("reference_output_basis"), dict) else {}
     qref = str(name_parts.get("quantitative_reference") or "").strip()
-    q_amount, q_unit, _q_flow = _parse_quantitative_reference(qref)
+    q_amount, q_unit, q_flow = _parse_quantitative_reference(qref)
     unit = _canonical_reference_unit(str(basis.get("unit") or "").strip()) or _canonical_reference_unit(q_unit)
     amount_text = _normalize_reference_amount(q_amount)
+    effective_flow_property_id = str(flow_property_id or "").strip() or None
+    if not effective_flow_property_id and is_reference_flow_process:
+        effective_flow_property_id = _flow_property_id_from_flow_dataset(fallback_flow_dataset)
+    validation = validate_reference_output_decision(
+        stage="reference_basis",
+        unit=unit,
+        policy=policy,
+        registry=registry,
+        flow_property_id=effective_flow_property_id,
+        flow_name=q_flow,
+        is_reference_flow=True,
+        is_product_or_waste=True,
+        confidence=_coerce_confidence(basis.get("confidence")),
+    )
+    recommended = _canonical_reference_unit(str(validation.get("recommended_unit") or "").strip())
+    if recommended:
+        unit = recommended
     if (not unit or _is_count_style_unit(unit) or _is_lcia_impact_unit(unit, policy)) and is_reference_flow_process:
         unit = _reference_unit_from_flow_dataset(fallback_flow_dataset)
     if not unit or _is_lcia_impact_unit(unit, policy):
         unit = _reference_output_fallback_unit(policy)
     return amount_text, unit
-
-
-def _is_lcia_forbidden_on_product_waste(
-    *,
-    exchange_name: str,
-    unit: str,
-    flow_type: str | None,
-    is_reference_flow: bool,
-    policy: dict[str, Any] | None,
-) -> bool:
-    hard = (policy or {}).get("hard_rules") if isinstance(policy, dict) else {}
-    forbid_by_unit = bool((hard or {}).get("forbid_lcia_units_for_product_waste", True))
-    forbid_by_name = bool((hard or {}).get("forbid_lcia_keywords_for_product_waste", True))
-    normalized_type = _normalize_flow_type(flow_type)
-    is_product_or_waste = normalized_type in {"product", "waste"} or is_reference_flow
-    if not is_product_or_waste:
-        return False
-    if forbid_by_unit and _is_lcia_impact_unit(unit, policy):
-        return True
-    if forbid_by_name and _is_lcia_impact_name(exchange_name, policy):
-        return True
-    return False
 
 
 def _append_reference_rule_comment(comment: str | None, message: str) -> str:
@@ -8132,11 +8428,14 @@ def _build_langgraph(
             direction = _reference_direction(state.get("operation"))
             plans = [item for item in (state.get("processes") or []) if isinstance(item, dict)]
             first_plan = plans[0] if plans else {}
+            fallback_flow_dataset = state.get("flow_dataset") if isinstance(state.get("flow_dataset"), dict) else None
             amount_text, reference_unit = _reference_basis_from_process_plan(
                 process_plan=first_plan,
-                fallback_flow_dataset=state.get("flow_dataset") if isinstance(state.get("flow_dataset"), dict) else None,
+                fallback_flow_dataset=fallback_flow_dataset,
                 is_reference_flow_process=bool(first_plan.get("is_reference_flow_process")),
                 policy=_load_reference_output_policy(),
+                flow_property_id=_flow_property_id_from_flow_dataset(fallback_flow_dataset) if bool(first_plan.get("is_reference_flow_process")) else None,
+                registry=_load_flow_property_unit_registry(),
             )
             exchange = {
                 "exchangeDirection": direction,
@@ -8272,6 +8571,8 @@ def _build_langgraph(
         reference_direction = _reference_direction(state.get("operation"))
         reference_output_policy = _load_reference_output_policy()
         fallback_flow_dataset = state.get("flow_dataset") if isinstance(state.get("flow_dataset"), dict) else None
+        reference_registry = _load_flow_property_unit_registry()
+        target_flow_property_id = _flow_property_id_from_flow_dataset(fallback_flow_dataset)
         cleaned_processes: list[dict[str, Any]] = []
         for proc in processes:
             if not isinstance(proc, dict):
@@ -8281,15 +8582,20 @@ def _build_langgraph(
             if not isinstance(exchanges, list):
                 exchanges = []
             plan = process_plan_index.get(process_id) or {}
+            reference_basis = plan.get("reference_output_basis") if isinstance(plan.get("reference_output_basis"), dict) else {}
+            reference_basis_confidence = _coerce_confidence(reference_basis.get("confidence"))
             plan_reference_flow = str(plan.get("reference_flow_name") or "").strip()
             is_reference_flow_process = bool(plan.get("is_reference_flow_process"))
             if is_reference_flow_process:
                 plan_reference_flow = target_flow_name
+            reference_flow_property_id = target_flow_property_id if is_reference_flow_process else None
             reference_amount_text, reference_unit = _reference_basis_from_process_plan(
                 process_plan=plan,
                 fallback_flow_dataset=fallback_flow_dataset,
                 is_reference_flow_process=is_reference_flow_process,
                 policy=reference_output_policy,
+                flow_property_id=reference_flow_property_id,
+                registry=reference_registry,
             )
             structure = plan.get("structure") if isinstance(plan.get("structure"), dict) else {}
             structure_inputs = {_normalize_exchange_name(_strip_flow_label(value)) for value in _clean_string_list(structure.get("inputs")) if _strip_flow_label(value).strip()}
@@ -8335,26 +8641,31 @@ def _build_langgraph(
                         unit = reference_unit
                     if not amount:
                         amount = reference_amount_text
-                if _is_lcia_forbidden_on_product_waste(
-                    exchange_name=name,
-                    unit=unit,
-                    flow_type=flow_type,
-                    is_reference_flow=is_reference,
-                    policy=reference_output_policy,
-                ):
-                    corrected_unit = reference_unit or _reference_output_fallback_unit(reference_output_policy)
-                    unit = corrected_unit
-                    comment_seed = str(exchange.get("generalComment") or "").strip()
-                    exchange["generalComment"] = _append_reference_rule_comment(
-                        comment_seed,
-                        "Reference-output policy: replaced LCIA-like unit with allowed reference unit.",
-                    )
                 resolved_unit = unit
                 if not resolved_unit:
                     if is_reference:
                         resolved_unit = reference_unit
                     else:
                         resolved_unit = _reference_output_fallback_unit(reference_output_policy)
+                validation = validate_reference_output_decision(
+                    stage="step3_exchange",
+                    unit=resolved_unit,
+                    policy=reference_output_policy,
+                    registry=reference_registry,
+                    flow_property_id=reference_flow_property_id if is_reference else None,
+                    exchange_name=name,
+                    flow_name=plan_reference_flow if is_reference else None,
+                    flow_type=flow_type,
+                    is_reference_flow=is_reference,
+                    confidence=reference_basis_confidence if is_reference else None,
+                )
+                corrected_unit = _canonical_reference_unit(str(validation.get("recommended_unit") or "").strip())
+                if corrected_unit and corrected_unit != resolved_unit:
+                    resolved_unit = corrected_unit
+                    exchange["generalComment"] = _append_reference_rule_comment(
+                        str(exchange.get("generalComment") or "").strip(),
+                        "Reference-output policy: corrected unit to match registry/policy constraints.",
+                    )
                 cleaned_exchange = {
                     **exchange,
                     "exchangeName": name,
@@ -8364,6 +8675,17 @@ def _build_langgraph(
                     "exchangeDirection": exchange_direction,
                     "flow_type": flow_type,
                 }
+                if isinstance(validation.get("violations"), list):
+                    violation_codes = [
+                        str(item.get("code") or "").strip()
+                        for item in validation.get("violations")
+                        if isinstance(item, dict)
+                    ]
+                    if violation_codes:
+                        cleaned_exchange["reference_output_validation"] = {
+                            "codes": [code for code in violation_codes if code],
+                            "hold": bool(validation.get("hold")),
+                        }
                 material_role = _normalize_material_role(exchange.get("material_role") or exchange.get("materialRole"))
                 if material_role:
                     cleaned_exchange["material_role"] = material_role
@@ -8396,6 +8718,32 @@ def _build_langgraph(
                     "is_reference_flow": True,
                     "flow_type": "product",
                 }
+                reference_validation = validate_reference_output_decision(
+                    stage="step3_reference_injection",
+                    unit=reference_exchange.get("unit"),
+                    policy=reference_output_policy,
+                    registry=reference_registry,
+                    flow_property_id=reference_flow_property_id,
+                    exchange_name=plan_reference_flow,
+                    flow_name=plan_reference_flow,
+                    flow_type="product",
+                    is_reference_flow=True,
+                    confidence=reference_basis_confidence,
+                )
+                injected_unit = _canonical_reference_unit(str(reference_validation.get("recommended_unit") or "").strip())
+                if injected_unit:
+                    reference_exchange["unit"] = injected_unit
+                if isinstance(reference_validation.get("violations"), list):
+                    reference_codes = [
+                        str(item.get("code") or "").strip()
+                        for item in reference_validation.get("violations")
+                        if isinstance(item, dict)
+                    ]
+                    if reference_codes:
+                        reference_exchange["reference_output_validation"] = {
+                            "codes": [code for code in reference_codes if code],
+                            "hold": bool(reference_validation.get("hold")),
+                        }
                 reference_exchange = _apply_exchange_evidence_defaults(
                     reference_exchange,
                     use_references=use_references,
@@ -9406,6 +9754,10 @@ def _build_langgraph(
         source_reference_items = _coerce_global_reference_items(source_references)
         default_reference_items = source_reference_items or _entry_level_compliance_reference()
         source_reference_index = _build_source_reference_index(source_datasets, source_references) if source_datasets and source_references else {}
+        reference_output_policy = _load_reference_output_policy()
+        reference_registry = _load_flow_property_unit_registry()
+        fallback_flow_dataset = state.get("flow_dataset") if isinstance(state.get("flow_dataset"), dict) else None
+        target_flow_property_id = _flow_property_id_from_flow_dataset(fallback_flow_dataset)
 
         process_plans = {str(item.get("process_id") or ""): item for item in (state.get("processes") or []) if isinstance(item, dict)}
         exchange_plans = {str(item.get("process_id") or ""): item for item in (state.get("matched_process_exchanges") or []) if isinstance(item, dict)}
@@ -9528,9 +9880,11 @@ def _build_langgraph(
                 next_internal_id = 1
                 reference_amount_text, reference_unit = _reference_basis_from_process_plan(
                     process_plan=plan,
-                    fallback_flow_dataset=state.get("flow_dataset") if isinstance(state.get("flow_dataset"), dict) else None,
+                    fallback_flow_dataset=fallback_flow_dataset,
                     is_reference_flow_process=is_reference_flow_process,
-                    policy=_load_reference_output_policy(),
+                    policy=reference_output_policy,
+                    flow_property_id=target_flow_property_id if is_reference_flow_process else None,
+                    registry=reference_registry,
                 )
                 if isinstance(exchanges_raw, list):
                     exchanges_raw = _dedupe_product_uuid_exchanges(

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -40,6 +41,17 @@ except ModuleNotFoundError:  # pragma: no cover
         build_process_from_flow_run_id,
     )
 
+try:
+    from scripts.origin.process_from_flow_cost_report import (  # type: ignore
+        DEFAULT_INPUT_PRICE_PER_1M,
+        DEFAULT_OUTPUT_PRICE_PER_1M,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    from process_from_flow_cost_report import (  # type: ignore
+        DEFAULT_INPUT_PRICE_PER_1M,
+        DEFAULT_OUTPUT_PRICE_PER_1M,
+    )
+
 from tiangong_lca_spec.state_lock import hold_state_file_lock
 
 # Keep workflow artifacts rooted at repository level so wrapper cwd does not split
@@ -51,6 +63,23 @@ TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".csv", ".tsv", ".xlsx", ".docx"}
 WORKFLOW_LOG_SUBDIR = Path("cache/workflow_logs")
 WORKFLOW_TIMING_REPORT = Path("cache/workflow_timing_report.json")
 WORKFLOW_TIMING_HEARTBEAT_SECONDS = 5.0
+DEFAULT_COST_INPUT_PRICE_PER_1M = float(DEFAULT_INPUT_PRICE_PER_1M)
+DEFAULT_COST_OUTPUT_PRICE_PER_1M = float(DEFAULT_OUTPUT_PRICE_PER_1M)
+ENV_COST_INPUT_PRICE_PER_1M = "TIANGONG_PFF_COST_INPUT_PRICE_PER_1M"
+ENV_COST_OUTPUT_PRICE_PER_1M = "TIANGONG_PFF_COST_OUTPUT_PRICE_PER_1M"
+
+
+def _read_cost_price_from_env(env_name: str, default_value: float) -> float:
+    raw = (os.getenv(env_name) or "").strip()
+    if not raw:
+        return default_value
+    try:
+        value = float(raw)
+    except ValueError:
+        return default_value
+    if value < 0:
+        return default_value
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,8 +90,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-translate-zh", action="store_true", help="Skip adding Chinese translations.")
     parser.add_argument(
         "--allow-density-conversion",
+        dest="allow_density_conversion",
         action="store_true",
-        help="Allow LLM-based density conversion for mass/volume mismatches.",
+        help="Enable LLM-based density conversion for mass/volume mismatches (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-allow-density-conversion",
+        dest="allow_density_conversion",
+        action="store_false",
+        help="Disable LLM-based density conversion for mass/volume mismatches.",
     )
     parser.add_argument(
         "--auto-balance-revise",
@@ -113,7 +149,37 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip process-update during publish (debug only).",
     )
-    parser.set_defaults(publish=True, commit=True, auto_balance_revise=True)
+    parser.add_argument(
+        "--cost-report",
+        dest="cost_report",
+        action="store_true",
+        help="Generate cache/llm_cost_report.json after run/publish (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-cost-report",
+        dest="cost_report",
+        action="store_false",
+        help="Disable automatic LLM cost report generation.",
+    )
+    parser.add_argument(
+        "--cost-input-price-per-1m",
+        type=float,
+        default=_read_cost_price_from_env(ENV_COST_INPUT_PRICE_PER_1M, DEFAULT_COST_INPUT_PRICE_PER_1M),
+        help=f"USD per 1M input tokens for cost report (default: {DEFAULT_COST_INPUT_PRICE_PER_1M}).",
+    )
+    parser.add_argument(
+        "--cost-output-price-per-1m",
+        type=float,
+        default=_read_cost_price_from_env(ENV_COST_OUTPUT_PRICE_PER_1M, DEFAULT_COST_OUTPUT_PRICE_PER_1M),
+        help=f"USD per 1M output tokens for cost report (default: {DEFAULT_COST_OUTPUT_PRICE_PER_1M}).",
+    )
+    parser.set_defaults(
+        publish=True,
+        commit=True,
+        auto_balance_revise=True,
+        allow_density_conversion=True,
+        cost_report=True,
+    )
     parser.add_argument(
         "--stop-after",
         choices=("references", "tech", "processes", "exchanges", "matches", "sources", "datasets"),
@@ -173,10 +239,24 @@ def _run_reference_stage(args: argparse.Namespace, run_id: str, *, log_path: Pat
         cmd.append("--no-translate-zh")
     if args.allow_density_conversion:
         cmd.append("--allow-density-conversion")
+    else:
+        cmd.append("--no-allow-density-conversion")
     if args.auto_balance_revise:
         cmd.append("--auto-balance-revise")
     else:
         cmd.append("--no-auto-balance-revise")
+    if args.cost_report:
+        cmd.append("--cost-report")
+    else:
+        cmd.append("--no-cost-report")
+    cmd.extend(
+        [
+            "--cost-input-price-per-1m",
+            str(args.cost_input_price_per_1m),
+            "--cost-output-price-per-1m",
+            str(args.cost_output_price_per_1m),
+        ]
+    )
     _run_python(script, cmd, log_path=log_path)
 
 
@@ -263,6 +343,8 @@ def _run_main_pipeline(args: argparse.Namespace, run_id: str, *, log_path: Path 
         cmd.append("--no-translate-zh")
     if args.allow_density_conversion:
         cmd.append("--allow-density-conversion")
+    else:
+        cmd.append("--no-allow-density-conversion")
     if args.auto_balance_revise:
         cmd.append("--auto-balance-revise")
     else:
@@ -277,6 +359,18 @@ def _run_main_pipeline(args: argparse.Namespace, run_id: str, *, log_path: Path 
             cmd.append("--skip-process-update")
     if args.commit:
         cmd.append("--commit")
+    if args.cost_report:
+        cmd.append("--cost-report")
+    else:
+        cmd.append("--no-cost-report")
+    cmd.extend(
+        [
+            "--cost-input-price-per-1m",
+            str(args.cost_input_price_per_1m),
+            "--cost-output-price-per-1m",
+            str(args.cost_output_price_per_1m),
+        ]
+    )
     _run_python(script, cmd, log_path=log_path)
 
 

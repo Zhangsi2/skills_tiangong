@@ -81,6 +81,7 @@ class OpenAIResponsesLLM:
         cache_hit: bool,
         status: str,
         latency_ms: float,
+        usage: dict[str, Any] | None = None,
         error: str | None = None,
     ) -> None:
         if not self._trace_path:
@@ -96,6 +97,17 @@ class OpenAIResponsesLLM:
             "status": status,
             "model": self._model,
         }
+        if isinstance(usage, dict) and usage:
+            record["usage"] = usage
+            input_tokens = usage.get("input_tokens")
+            output_tokens = usage.get("output_tokens")
+            total_tokens = usage.get("total_tokens")
+            if isinstance(input_tokens, int):
+                record["input_tokens"] = input_tokens
+            if isinstance(output_tokens, int):
+                record["output_tokens"] = output_tokens
+            if isinstance(total_tokens, int):
+                record["total_tokens"] = total_tokens
         if error:
             record["error"] = error[:500]
         try:
@@ -145,13 +157,15 @@ class OpenAIResponsesLLM:
                     kwargs["text"] = text_options
                 response = self._client.responses.create(**kwargs)
                 output = self._extract_output(response)
+                usage = self._extract_usage(response)
                 if cache_path:
-                    self._cache_store(cache_path, {"output": output})
+                    self._cache_store(cache_path, {"output": output, "usage": usage})
                 self._append_trace(
                     digest=digest,
                     cache_hit=False,
                     status="ok",
                     latency_ms=(time.monotonic() - started) * 1000,
+                    usage=usage,
                 )
                 return output
             except (self._api_connection_error_cls, self._api_status_error_cls) as exc:
@@ -202,6 +216,63 @@ class OpenAIResponsesLLM:
                     if content.get("type") == "output_text":
                         parts.append(content.get("text", ""))
         return "\n".join(parts)
+
+    @staticmethod
+    def _usage_get(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    @staticmethod
+    def _coerce_int(value: Any) -> int | None:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                return int(float(text))
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _extract_usage(cls, response: Any) -> dict[str, Any]:
+        usage_obj = getattr(response, "usage", None)
+        if usage_obj is None and isinstance(response, dict):
+            usage_obj = response.get("usage")
+        if usage_obj is None:
+            return {}
+
+        usage: dict[str, Any] = {}
+        input_tokens = cls._coerce_int(cls._usage_get(usage_obj, "input_tokens"))
+        output_tokens = cls._coerce_int(cls._usage_get(usage_obj, "output_tokens"))
+        total_tokens = cls._coerce_int(cls._usage_get(usage_obj, "total_tokens"))
+
+        input_details = cls._usage_get(usage_obj, "input_tokens_details")
+        cached_tokens = cls._coerce_int(cls._usage_get(input_details, "cached_tokens"))
+
+        output_details = cls._usage_get(usage_obj, "output_tokens_details")
+        reasoning_tokens = cls._coerce_int(cls._usage_get(output_details, "reasoning_tokens"))
+
+        if input_tokens is not None:
+            usage["input_tokens"] = input_tokens
+        if output_tokens is not None:
+            usage["output_tokens"] = output_tokens
+        if total_tokens is not None:
+            usage["total_tokens"] = total_tokens
+        elif input_tokens is not None and output_tokens is not None:
+            usage["total_tokens"] = input_tokens + output_tokens
+        if cached_tokens is not None:
+            usage["cached_input_tokens"] = cached_tokens
+        if reasoning_tokens is not None:
+            usage["reasoning_tokens"] = reasoning_tokens
+        return usage
 
 
 def load_openai_from_env() -> tuple[str, str, str | None]:

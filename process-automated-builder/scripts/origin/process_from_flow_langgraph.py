@@ -68,6 +68,19 @@ except ModuleNotFoundError:  # pragma: no cover
         load_openai_from_env,
     )
 
+try:
+    from scripts.origin.process_from_flow_cost_report import (  # type: ignore
+        DEFAULT_INPUT_PRICE_PER_1M,
+        DEFAULT_OUTPUT_PRICE_PER_1M,
+        generate_cost_report,
+    )
+except ModuleNotFoundError:  # pragma: no cover
+    from process_from_flow_cost_report import (  # type: ignore
+        DEFAULT_INPUT_PRICE_PER_1M,
+        DEFAULT_OUTPUT_PRICE_PER_1M,
+        generate_cost_report,
+    )
+
 PROCESS_FROM_FLOW_ARTIFACTS_ROOT = Path("artifacts/process_from_flow")
 LATEST_RUN_ID_PATH = PROCESS_FROM_FLOW_ARTIFACTS_ROOT / ".latest_run_id"
 DATABASE_TOOL_NAME = "Database_CRUD_Tool"
@@ -80,6 +93,10 @@ PUBLISH_SUMMARY = "publish_summary.json"
 METHOD_POLICY_AUTOFIX_REPORT = "method_policy_autofix_report.json"
 DEFAULT_DATASET_VERSION = "01.01.000"
 DEFAULT_PLACEHOLDER_FLOW_VERSION = "00.00.000"
+DEFAULT_COST_INPUT_PRICE_PER_1M = float(DEFAULT_INPUT_PRICE_PER_1M)
+DEFAULT_COST_OUTPUT_PRICE_PER_1M = float(DEFAULT_OUTPUT_PRICE_PER_1M)
+ENV_COST_INPUT_PRICE_PER_1M = "TIANGONG_PFF_COST_INPUT_PRICE_PER_1M"
+ENV_COST_OUTPUT_PRICE_PER_1M = "TIANGONG_PFF_COST_OUTPUT_PRICE_PER_1M"
 
 _RUN_ID_SAFE_TOKEN_PATTERN = re.compile(r"[^0-9A-Za-z._-]+")
 
@@ -106,6 +123,19 @@ def build_process_from_flow_run_id(flow_path: Path, operation: str = "produce") 
     return f"pfw_{flow_code}_{flow_uuid_short}_{operation_token}_{generate_run_id()}"
 
 
+def _read_cost_price_from_env(env_name: str, default_value: float) -> float:
+    raw = (os.getenv(env_name) or "").strip()
+    if not raw:
+        return default_value
+    try:
+        value = float(raw)
+    except ValueError:
+        return default_value
+    if value < 0:
+        return default_value
+    return value
+
+
 def _build_main_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -128,8 +158,15 @@ def _build_main_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-translate-zh", action="store_true", help="Skip adding Chinese translations to multi-language fields.")
     parser.add_argument(
         "--allow-density-conversion",
+        dest="allow_density_conversion",
         action="store_true",
-        help="Allow LLM-based density estimates for mass<->volume conversions (product/waste flows only).",
+        help="Enable LLM-based density estimates for mass<->volume conversions (product/waste flows only; default: enabled).",
+    )
+    parser.add_argument(
+        "--no-allow-density-conversion",
+        dest="allow_density_conversion",
+        action="store_false",
+        help="Disable LLM-based density estimates for mass<->volume conversions.",
     )
     parser.add_argument(
         "--auto-balance-revise",
@@ -193,7 +230,31 @@ def _build_main_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip process-update during --publish/--publish-only (debug only).",
     )
-    parser.set_defaults(auto_balance_revise=True)
+    parser.add_argument(
+        "--cost-report",
+        dest="cost_report",
+        action="store_true",
+        help="Generate cache/llm_cost_report.json after run/publish (default: enabled).",
+    )
+    parser.add_argument(
+        "--no-cost-report",
+        dest="cost_report",
+        action="store_false",
+        help="Disable automatic LLM cost report generation.",
+    )
+    parser.add_argument(
+        "--cost-input-price-per-1m",
+        type=float,
+        default=_read_cost_price_from_env(ENV_COST_INPUT_PRICE_PER_1M, DEFAULT_COST_INPUT_PRICE_PER_1M),
+        help=f"USD per 1M input tokens for cost report (default: {DEFAULT_COST_INPUT_PRICE_PER_1M}).",
+    )
+    parser.add_argument(
+        "--cost-output-price-per-1m",
+        type=float,
+        default=_read_cost_price_from_env(ENV_COST_OUTPUT_PRICE_PER_1M, DEFAULT_COST_OUTPUT_PRICE_PER_1M),
+        help=f"USD per 1M output tokens for cost report (default: {DEFAULT_COST_OUTPUT_PRICE_PER_1M}).",
+    )
+    parser.set_defaults(auto_balance_revise=True, allow_density_conversion=True, cost_report=True)
     return parser
 
 
@@ -254,6 +315,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     namespace = parser.parse_args(cli_args)
     setattr(namespace, "command", "run")
     return namespace
+
+
+def _maybe_generate_cost_report(
+    *,
+    run_id: str,
+    enabled: bool,
+    input_price_per_1m: float,
+    output_price_per_1m: float,
+) -> None:
+    if not enabled:
+        return
+    log_path = PROCESS_FROM_FLOW_ARTIFACTS_ROOT / run_id / "cache" / "llm_log.jsonl"
+    if not log_path.exists():
+        return
+    try:
+        report, output_path = generate_cost_report(
+            run_id=run_id,
+            log_path=log_path,
+            input_price_per_1m=input_price_per_1m,
+            output_price_per_1m=output_price_per_1m,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] Failed to generate LLM cost report for run {run_id}: {exc}", file=sys.stderr)
+        return
+    totals = report.get("totals") if isinstance(report.get("totals"), Mapping) else {}
+    total_cost = totals.get("total_cost_usd")
+    input_tokens = totals.get("input_tokens")
+    output_tokens = totals.get("output_tokens")
+    print(
+        (
+            f"[progress] llm_cost_report={output_path} "
+            f"input_tokens={input_tokens} output_tokens={output_tokens} total_cost_usd={total_cost}"
+        ),
+        file=sys.stderr,
+    )
 
 
 def _load_state(path: Path) -> dict[str, Any]:
@@ -1256,6 +1352,21 @@ def _load_reference_output_low_confidence(run_id: str) -> list[dict[str, Any]]:
     return [item for item in rows if isinstance(item, dict)]
 
 
+def _load_chain_conflict_holds(run_id: str) -> list[dict[str, Any]]:
+    try:
+        state = _load_run_state(run_id)
+    except SystemExit:
+        return []
+    preflight = state.get("chain_preflight")
+    if not isinstance(preflight, Mapping):
+        return []
+    status = str(preflight.get("status") or "").strip().lower()
+    errors = preflight.get("errors")
+    if status != "failed" or not isinstance(errors, list):
+        return []
+    return [item for item in errors if isinstance(item, dict)]
+
+
 def _build_flow_alignment_from_process_datasets(datasets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     alignment: list[dict[str, Any]] = []
     for payload in datasets:
@@ -2007,6 +2118,18 @@ def _run_publish_sequence(
                     "examples": low_conf_outputs[:5],
                 }
             )
+        chain_conflicts = _load_chain_conflict_holds(run_id)
+        if chain_conflicts:
+            signals.append(
+                {
+                    "code": "chain_conflict_hold",
+                    "reason": (
+                        f"{len(chain_conflicts)} severe chain conflict(s) remain in chain_preflight."
+                    ),
+                    "chain_conflict_count": len(chain_conflicts),
+                    "examples": chain_conflicts[:5],
+                }
+            )
         held_flows = _load_flow_property_holds(run_id)
         if held_flows:
             signals.append(
@@ -2165,9 +2288,21 @@ def _run_publish_sequence(
                                 ),
                             }
                         )
+                    elif code == "chain_conflict_hold":
+                        _append_manual_required(
+                            {
+                                "code": code,
+                                "reason": signal.get("reason"),
+                                "minimum_action": (
+                                    "Resolve chain_preflight errors in state.chain_preflight.errors "
+                                    "before publish."
+                                ),
+                            }
+                        )
 
     final_signals, _final_held = _collect_rebuild_signals(process_update_report)
     low_confidence_signals = [item for item in final_signals if str(item.get("code") or "") == "reference_output_low_confidence"]
+    chain_conflict_signals = [item for item in final_signals if str(item.get("code") or "") == "chain_conflict_hold"]
     if low_confidence_signals:
         _append_manual_required(
             {
@@ -2179,13 +2314,24 @@ def _run_publish_sequence(
                 ),
             }
         )
-        if commit:
-            method_policy_report["updated_at_utc"] = _utc_now_iso()
-            dump_json(method_policy_report, _method_policy_autofix_report_path(cache_dir))
-            raise SystemExit(
-                "Publish blocked: low-confidence reference-output unit decisions remain. "
-                "Resolve state.reference_output_decision_summary.low_confidence_processes first."
-            )
+    if chain_conflict_signals:
+        _append_manual_required(
+            {
+                "code": "chain_conflict_hold",
+                "reason": chain_conflict_signals[0].get("reason"),
+                "minimum_action": (
+                    "Fix severe chain conflicts first (state.chain_preflight.errors)."
+                ),
+            }
+        )
+    blocking_signals = low_confidence_signals + chain_conflict_signals
+    if blocking_signals and commit:
+        method_policy_report["updated_at_utc"] = _utc_now_iso()
+        dump_json(method_policy_report, _method_policy_autofix_report_path(cache_dir))
+        raise SystemExit(
+            "Publish blocked: unresolved hard-rule holds remain "
+            "(reference_output_low_confidence / chain_conflict_hold)."
+        )
 
     flow_publish_stats = _publish_prepared_flow_plans(
         flow_plans,
@@ -2336,6 +2482,12 @@ def main() -> None:
             skip_flow_auto_build=args.skip_flow_auto_build,
             skip_process_update=args.skip_process_update,
         )
+        _maybe_generate_cost_report(
+            run_id=run_id,
+            enabled=bool(args.cost_report),
+            input_price_per_1m=float(args.cost_input_price_per_1m),
+            output_price_per_1m=float(args.cost_output_price_per_1m),
+        )
         return
 
     if args.resume:
@@ -2409,12 +2561,9 @@ def main() -> None:
     if llm is not None and not args.no_translate_zh:
         translator = Translator(llm=llm)
 
-    if args.allow_density_conversion:
-        if initial_state is None:
-            initial_state = {}
-        initial_state["allow_density_conversion"] = True
     if initial_state is None:
         initial_state = {}
+    initial_state["allow_density_conversion"] = bool(args.allow_density_conversion)
     initial_state["auto_balance_revise"] = bool(args.auto_balance_revise)
 
     service = ProcessFromFlowService(llm=llm, translator=translator)
@@ -2431,12 +2580,24 @@ def main() -> None:
     if args.stop_after and args.stop_after != "datasets":
         print(f"Stopped after stage '{args.stop_after}'. Edit state and resume with: --resume --run-id {run_id}", file=sys.stderr)
         LATEST_RUN_ID_PATH.write_text(run_id, encoding="utf-8")
+        _maybe_generate_cost_report(
+            run_id=run_id,
+            enabled=bool(args.cost_report),
+            input_price_per_1m=float(args.cost_input_price_per_1m),
+            output_price_per_1m=float(args.cost_output_price_per_1m),
+        )
         return
 
     datasets = result_state.get("process_datasets") or []
     if not isinstance(datasets, list) or not datasets:
         print("No process datasets generated.", file=sys.stderr)
         LATEST_RUN_ID_PATH.write_text(run_id, encoding="utf-8")
+        _maybe_generate_cost_report(
+            run_id=run_id,
+            enabled=bool(args.cost_report),
+            input_price_per_1m=float(args.cost_input_price_per_1m),
+            output_price_per_1m=float(args.cost_output_price_per_1m),
+        )
         return
 
     written = _write_process_exports(datasets, exports_dir)
@@ -2474,6 +2635,12 @@ def main() -> None:
             skip_flow_auto_build=args.skip_flow_auto_build,
             skip_process_update=args.skip_process_update,
         )
+    _maybe_generate_cost_report(
+        run_id=run_id,
+        enabled=bool(args.cost_report),
+        input_price_per_1m=float(args.cost_input_price_per_1m),
+        output_price_per_1m=float(args.cost_output_price_per_1m),
+    )
     if args.retain_runs:
         _cleanup_runs(retain=args.retain_runs, current_run_id=run_id)
 

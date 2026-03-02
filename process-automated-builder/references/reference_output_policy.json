@@ -47,5 +47,9 @@
       "photochemical"
     ]
   },
+  "impact_flow_property_ids": [
+    "585d3441-af58-49c9-a5c2-1d1e5b63f8d5",
+    "f65d356a-d702-4d79-850e-dd68b47bbcd9"
+  ],
   "reference_unit_overrides": []
 }

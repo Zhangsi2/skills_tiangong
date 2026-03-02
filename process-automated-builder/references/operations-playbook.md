@@ -102,8 +102,24 @@ journalctl --user -u process-from-flow-batch.service -f
 ```
 
 Notes:
+- Service runs batch runner with `--watch` and keeps polling `FLOW_DIR` for newly added `*.json`.
+- Service also loads `~/.openclaw/.env` by default for API/MCP credentials.
 - Service is configured with `Restart=always`; if runner is externally killed, it relaunches and continues from `STATE_PATH`.
 - Default `STALL_TIMEOUT_SECONDS` in env example is set to `1800` to reduce false positives on long stage-7 runs.
+
+## 8a) One-Command Submit to Daemon Queue
+```bash
+process-automated-builder/scripts/systemd/submit-process-from-flow.sh \
+  --flow-file /abs/path/to/reference-flow.json
+
+# or inline
+process-automated-builder/scripts/systemd/submit-process-from-flow.sh \
+  --flow-json '{"flowDataSet": {...}}'
+```
+
+Notes:
+- The submit script writes a uniquely named JSON into `FLOW_DIR`.
+- By default it also starts/enables `process-from-flow-batch.service`.
 
 ## Runtime Notes
 - New runs require flow input; no default flow file is used.
@@ -116,6 +132,8 @@ Notes:
 - `--publish` and `--commit` may invoke remote CRUD services; use dry-run first.
 - `--publish` / `--publish-only` now execute one sequence: `flow-auto-build -> process-update -> flow publish -> process publish -> source publish`.
 - Method-policy auto-repair is enabled by default in flow-auto-build/process-update/publish paths; see `cache/method_policy_autofix_report.json` for deterministic fixes, retry attempts, and any `manual_required` residue.
+- LLM cost report is enabled by default in CLI runs; output path is `cache/llm_cost_report.json`.
+- Disable cost report with `--no-cost-report`; override prices with `--cost-input-price-per-1m` / `--cost-output-price-per-1m` or env `TIANGONG_PFF_COST_INPUT_PRICE_PER_1M` / `TIANGONG_PFF_COST_OUTPUT_PRICE_PER_1M`.
 
 ## Parallel Orchestration Rules
 - Run-level parallel (recommended):
