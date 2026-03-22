@@ -65,7 +65,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "command": { "type": "string", "enum": ["prepare", "project"] },
+        "command": { "type": "string", "enum": ["prepare", "build", "project"] },
         "request": { "type": "string", "minLength": 1 },
         "model_file": { "type": "string", "minLength": 1 },
         "out_dir": { "type": "string", "minLength": 1 },

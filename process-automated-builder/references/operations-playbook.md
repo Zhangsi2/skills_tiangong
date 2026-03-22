@@ -19,6 +19,12 @@ process-automated-builder/scripts/run-process-automated-builder.sh \
   --mode workflow \
   --flow-file /abs/path/to/reference-flow.json \
   -- --operation produce
+
+# canonical direct entrypoint
+python3 process-automated-builder/scripts/origin/process_from_flow_langgraph.py \
+  workflow \
+  --flow /abs/path/to/reference-flow.json \
+  --operation produce
 ```
 
 ## 3) Run with Inline JSON (Agent-Friendly)
@@ -133,6 +139,7 @@ Notes:
 - `--publish` / `--publish-only` now execute one sequence: `flow-auto-build -> process-update -> flow publish -> process publish -> source publish`.
 - Method-policy auto-repair is enabled by default in flow-auto-build/process-update/publish paths; see `cache/method_policy_autofix_report.json` for deterministic fixes, retry attempts, and any `manual_required` residue.
 - LLM cost report is enabled by default in CLI runs; output path is `cache/llm_cost_report.json`.
+- OpenClaw-friendly summary is written to `cache/agent_handoff_summary.json`; prefer that before loading full state or logs.
 - Disable cost report with `--no-cost-report`; override prices with `--cost-input-price-per-1m` / `--cost-output-price-per-1m` or env `TIANGONG_PFF_COST_INPUT_PRICE_PER_1M` / `TIANGONG_PFF_COST_OUTPUT_PRICE_PER_1M`.
 
 ## Parallel Orchestration Rules

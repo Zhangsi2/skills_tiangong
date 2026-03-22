@@ -22,7 +22,7 @@ LINEAGE_SCHEMA_PATH = SKILL_DIR / "assets" / "lineage-manifest.schema.json"
 
 PROCESS_BUILDER_WRAPPER = REPO_ROOT / "process-automated-builder" / "scripts" / "run-process-automated-builder.sh"
 LIFECYCLEMODEL_BUILDER_WRAPPER = REPO_ROOT / "lifecyclemodel-automated-builder" / "scripts" / "run-lifecyclemodel-automated-builder.sh"
-PROJECTOR_WRAPPER = REPO_ROOT / "lifecyclemodel-resulting-process-projector" / "scripts" / "run-lifecyclemodel-resulting-process-projector.sh"
+PROJECTOR_WRAPPER = REPO_ROOT / "lifecyclemodel-resulting-process-builder" / "scripts" / "run-lifecyclemodel-resulting-process-builder.sh"
 
 
 def now_iso() -> str:
@@ -795,11 +795,8 @@ def execution_status_by_node(plan: dict[str, Any], execution_results: list[dict[
 def collect_resulting_process_relations(execution_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     relations: list[dict[str, Any]] = []
     for result in execution_results:
-        bundle_path = (
-            (result.get("artifacts") or {}).get("projection_bundle")
-            if isinstance(result.get("artifacts"), dict)
-            else None
-        )
+        artifacts = result.get("artifacts") or {}
+        bundle_path = projector_bundle_path_from_artifacts(artifacts) if isinstance(artifacts, dict) else None
         if not bundle_path:
             continue
         path = Path(str(bundle_path))
@@ -1045,6 +1042,20 @@ def discover_projector_artifacts(out_dir: Path) -> dict[str, Any]:
     }
 
 
+def projector_bundle_path_from_artifacts(artifacts: dict[str, Any]) -> str | None:
+    for key in ("projection_bundle", "process_projection_bundle"):
+        bundle_path = first_non_empty((artifacts or {}).get(key))
+        if bundle_path:
+            return bundle_path
+    out_dir = first_non_empty((artifacts or {}).get("out_dir"))
+    if not out_dir:
+        return None
+    candidate = Path(str(out_dir)) / "process-projection-bundle.json"
+    if candidate.exists():
+        return str(candidate.resolve())
+    return None
+
+
 def infer_projector_model_file(
     invocation: dict[str, Any],
     execution_map: dict[str, dict[str, Any]],
@@ -1068,10 +1079,10 @@ def build_projector_command(
     invocation: dict[str, Any],
     execution_map: dict[str, dict[str, Any]],
 ) -> tuple[list[str], Path, dict[str, Any]]:
-    require_file(PROJECTOR_WRAPPER, "projector wrapper")
+    require_file(PROJECTOR_WRAPPER, "resulting process builder wrapper")
     config = invocation["config"]
     artifact_dir = Path(invocation["artifact_dir"]).resolve()
-    command = [str(PROJECTOR_WRAPPER), first_non_empty(config.get("command"), "project") or "project"]
+    command = [str(PROJECTOR_WRAPPER), first_non_empty(config.get("command"), "build") or "build"]
     request = first_non_empty(config.get("request"))
     if request:
         require_file(Path(request), "projector request")
@@ -1257,7 +1268,7 @@ def collect_publish_bundle(
                 except Exception:
                     continue
         if result.get("kind") == "projector" and include_resulting_process_relations:
-            bundle_path = artifacts.get("projection_bundle")
+            bundle_path = projector_bundle_path_from_artifacts(artifacts)
             if bundle_path and Path(str(bundle_path)).exists():
                 try:
                     bundle = load_json(Path(str(bundle_path)))

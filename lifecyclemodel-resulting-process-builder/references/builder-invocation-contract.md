@@ -1,4 +1,4 @@
-# Projector Invocation Contract
+# Builder Invocation Contract
 
 ## Caller
 
@@ -11,7 +11,7 @@ Secondary caller candidates:
 
 ## Invocation purpose
 
-Project a lifecycle model into one or more resulting process datasets whose exchange values are computed from model topology and allocation logic.
+Build a lifecycle model into one or more resulting process datasets whose exchange values are computed from model topology and allocation logic.
 
 ## Input contract
 
@@ -72,7 +72,7 @@ Project a lifecycle model into one or more resulting process datasets whose exch
 
 ## Decision rule: create vs update
 
-Projector should not decide persistence on its own.
+Builder should not decide persistence on its own.
 
 It may suggest:
 - `create`
@@ -83,8 +83,8 @@ But final write behavior belongs to orchestrator / approved publish layer.
 
 ## Key separation rule
 
-Projector may compute process payloads, but it should not replace:
+Builder may compute process payloads, but it should not replace:
 - `process-automated-builder` for flow-to-process synthesis
 - `lifecyclemodel-automated-builder` for model assembly
 
-It only owns model-to-process projection.
+It only owns deterministic model-to-resulting-process construction.

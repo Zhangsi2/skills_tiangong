@@ -34,8 +34,8 @@
       "dry_run": true
     },
     "projector": {
-      "command": "project",
-      "request": "../../lifecyclemodel-resulting-process-projector/assets/example-request.json"
+      "command": "build",
+      "request": "../../lifecyclemodel-resulting-process-builder/assets/example-request.json"
     }
   },
   "orchestration": {

@@ -1,6 +1,6 @@
 ---
 name: lifecyclemodel-recursive-orchestrator
-description: Plan and orchestrate recursive LCA assembly across `process-automated-builder`, `lifecyclemodel-automated-builder`, and `lifecyclemodel-resulting-process-projector`, including reuse decisions, submodel builds, resulting-process projection, graph manifests, and lineage manifests. Use when a product system request spans multiple model/process layers and needs a reproducible local orchestration run before any publish handoff.
+description: Plan and orchestrate recursive LCA assembly across `process-automated-builder`, `lifecyclemodel-automated-builder`, and `lifecyclemodel-resulting-process-builder`, including reuse decisions, submodel builds, resulting-process construction, graph manifests, and lineage manifests. Use when a product system request spans multiple model/process layers and needs a reproducible local orchestration run before any publish handoff.
 ---
 
 # Lifecycle Model Recursive Orchestrator
@@ -55,7 +55,7 @@ Use extra `nodes` only for additional dependencies or subsystems beyond the root
 
 - `process_builder` calls `process-automated-builder/scripts/run-process-automated-builder.sh`
 - `submodel_builder` calls `lifecyclemodel-automated-builder/scripts/run-lifecyclemodel-automated-builder.sh`
-- `projector` calls `lifecyclemodel-resulting-process-projector/scripts/run-lifecyclemodel-resulting-process-projector.sh`
+- `projector` calls `lifecyclemodel-resulting-process-builder/scripts/run-lifecyclemodel-resulting-process-builder.sh`
 
 The orchestrator does not reimplement those skills. It owns request normalization, node resolution, invocation ordering, and final manifests.
 

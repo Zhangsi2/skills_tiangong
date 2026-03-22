@@ -1,4 +1,4 @@
-# Projection Contract
+# Resulting Process Build Contract
 
 ## Canonical sources
 
@@ -64,6 +64,6 @@ Projected process payloads should preserve or derive:
 ## Rule of separation
 
 - `process-automated-builder` creates a process from external flow evidence.
-- `lifecyclemodel-resulting-process-projector` creates a process from lifecycle model computation.
+- `lifecyclemodel-resulting-process-builder` creates a resulting process from lifecycle model computation.
 
 These are not interchangeable pipelines.

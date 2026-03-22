@@ -27,7 +27,7 @@ This is strong evidence that resulting-process generation is its own domain work
 - projection packaging contracts
 - no direct DB mutation by default
 
-### lifecyclemodel-resulting-process-projector
+### lifecyclemodel-resulting-process-builder
 - projection computation and packaging
 - resulting-process metadata stamping
 - relation payload generation

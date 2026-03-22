@@ -32,11 +32,11 @@ That means the platform already has an embryonic relation model:
 
 The new orchestrator should standardize and enrich this rather than invent a conflicting path.
 
-## Resulting-process generation: dedicated projector skill
+## Resulting-process generation: dedicated builder skill
 
 ### Updated recommendation
 Create a dedicated skill:
-- `lifecyclemodel-resulting-process-projector`
+- `lifecyclemodel-resulting-process-builder`
 
 ### Why the recommendation changed
 After checking `tiangong-lca-next/src/services/lifeCycleModels/util_calculate.ts`, the platform already treats resulting-process generation as a substantial workflow with:
@@ -57,7 +57,7 @@ So a resulting process is not merely a thin handle and should not be routed thro
 - `lifecyclemodel-automated-builder`
   - assemble lifecycle model `json_ordered`
   - ensure the model carries `referenceToResultingProcess`
-- `lifecyclemodel-resulting-process-projector`
+- `lifecyclemodel-resulting-process-builder`
   - compute and package projected resulting process datasets from lifecycle model topology and math
 - `lifecyclemodel-recursive-orchestrator`
   - decide when to invoke each one and keep lineage consistent
@@ -67,6 +67,6 @@ So a resulting process is not merely a thin handle and should not be routed thro
 1. discover reusable models / resulting processes / processes
 2. if needed, call `process-automated-builder` to fill missing process nodes
 3. call `lifecyclemodel-automated-builder` to assemble submodel or root model `json_ordered`
-4. call `lifecyclemodel-resulting-process-projector` to compute/package resulting process payloads
+4. call `lifecyclemodel-resulting-process-builder` to compute/package resulting process payloads
 5. hand model payload plus projected process payloads/relation metadata to MCP / downstream publish path
 6. let MCP derive graph presentation content from the canonical model/process JSON

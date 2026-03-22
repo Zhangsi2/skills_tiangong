@@ -37,7 +37,7 @@ A unified, explicit cross-project relation contract for:
 
 ### Move into skill contracts now
 - recursive planning semantics
-- projector invocation contract
+- resulting-process builder invocation contract
 - explicit relation payload bundle
 - lineage manifest schema
 

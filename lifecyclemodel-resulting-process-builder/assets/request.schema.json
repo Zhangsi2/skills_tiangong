@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.local/lifecyclemodel-resulting-process-projector/request.schema.json",
-  "title": "LifecycleModelResultingProcessProjectorRequest",
+  "$id": "https://example.local/lifecyclemodel-resulting-process-builder/request.schema.json",
+  "title": "LifecycleModelResultingProcessBuilderRequest",
   "type": "object",
   "additionalProperties": false,
   "required": ["source_model", "projection", "publish"],
@@ -36,6 +36,26 @@
         },
         "attach_graph_snapshot": { "type": "boolean" },
         "attach_graph_snapshot_uri": { "type": "string", "minLength": 1 }
+      }
+    },
+    "process_sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "process_catalog_path": { "type": "string", "minLength": 1 },
+        "run_dirs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "process_json_dirs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "process_json_files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "allow_mcp_lookup": { "type": "boolean" }
       }
     },
     "publish": {

@@ -9,6 +9,7 @@ usage() {
 Usage: run-flow-governance-review.sh <command> [args...]
 
 Commands:
+  openclaw-full-run
   run-governance
   review-flows
   flow-dedup-candidates
@@ -33,6 +34,9 @@ fi
 shift || true
 
 case "${command}" in
+  openclaw-full-run)
+    exec python3 "${SCRIPT_DIR}/openclaw_full_run.py" "$@"
+    ;;
   run-governance)
     exec python3 "${SCRIPT_DIR}/flow_governance_orchestrator.py" "$@"
     ;;

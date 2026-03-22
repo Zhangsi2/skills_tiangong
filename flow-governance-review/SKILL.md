@@ -14,6 +14,7 @@ Do not use this skill for:
 
 ## Commands
 
+- `openclaw-full-run`
 - `run-governance`
 - `review-flows`
 - `flow-dedup-candidates`
@@ -34,6 +35,15 @@ Run them through:
 scripts/run-flow-governance-review.sh <command> ...
 ```
 
+For OpenClaw when only a flow UUID is available, prefer:
+
+```bash
+scripts/run-flow-governance-review.sh openclaw-full-run \
+  --flow-id 4b5eadd2-816c-420c-b382-5e0a975b53a6
+```
+
+This wrapper materializes live subject-flow and referencing-process snapshots, runs the existing `run-governance` orchestrator unchanged, and writes `openclaw-handoff-summary.json` for downstream agent handoff.
+
 ## Preferred Entry
 
 Use `run-governance` for the standard end-to-end governance path:
@@ -44,6 +54,8 @@ Use `run-governance` for the standard end-to-end governance path:
 4. scan and deterministically repair process references
 5. validate repaired processes
 6. export residual OpenClaw review packs
+
+Use `openclaw-full-run` when OpenClaw starts from a flow UUID instead of prebuilt local snapshots and still needs the same standard outputs.
 
 Use the lower-level commands only when another skill or an external orchestrator needs one specific artifact.
 
@@ -56,6 +68,7 @@ Use the lower-level commands only when another skill or an external orchestrator
 - `flow-alias-map.json` when alias building is applicable
 - `scan-findings.json` and `repair-summary.json` when process snapshots are provided
 - `review-pack.json` plus `review-pack-context.json` for OpenClaw text review
+- `live-fetch-manifest.json` and `openclaw-handoff-summary.json` from `openclaw-full-run`
 
 For flow text review, the exported review pack can include:
 

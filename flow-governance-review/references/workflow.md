@@ -14,6 +14,25 @@ This skill intentionally keeps a narrow boundary:
 
 ## Command Matrix
 
+### `openclaw-full-run`
+
+OpenClaw-friendly wrapper for the standard workflow when the caller starts with a flow UUID instead of local snapshots.
+
+The wrapper:
+
+1. fetches visible product/waste flow rows for `--flow-id`
+2. fetches visible processes that reference that flow UUID
+3. materializes those snapshots under `inputs/`
+4. calls `run-governance` with the fetched snapshots
+5. writes `live-fetch-manifest.json` and `openclaw-handoff-summary.json`
+
+Recommended usage:
+
+```bash
+scripts/run-flow-governance-review.sh openclaw-full-run \
+  --flow-id 4b5eadd2-816c-420c-b382-5e0a975b53a6
+```
+
 ### `run-governance`
 
 Preferred fixed orchestration entrypoint for this skill.

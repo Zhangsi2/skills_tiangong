@@ -33,7 +33,7 @@ Use when a coherent set of process nodes should be assembled into a lifecycle mo
 - referenceToResultingProcess contract presence
 - local artifact path
 
-## 3. Orchestrator -> lifecyclemodel-resulting-process-projector
+## 3. Orchestrator -> lifecyclemodel-resulting-process-builder
 
 Use when a lifecycle model must emit one or more resulting process datasets whose exchanges come from model topology and allocation math.
 
