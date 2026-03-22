@@ -62,6 +62,20 @@ def ensure_list(value: Any) -> list[Any]:
     return [value]
 
 
+def unique_strings(values: list[str | None]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not value:
+            continue
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        unique.append(text)
+    return unique
+
+
 def first_non_empty(*values: Any) -> str | None:
     for value in values:
         if value is None:
@@ -614,6 +628,26 @@ def auto_detect_process_catalog_path(model_path: str | None) -> str | None:
     return None
 
 
+def auto_detect_process_json_dirs(model_path: str | None) -> list[str]:
+    if not model_path:
+        return []
+    path = Path(model_path).expanduser().resolve()
+    candidates: list[Path] = []
+    if path.parent.name == "lifecyclemodels":
+        candidates.append(path.parent.parent / "processes")
+    candidates.append(path.parent / "processes")
+    stem = path.stem
+    if stem.endswith("-model"):
+        prefix = stem[: -len("-model")].strip()
+        if prefix:
+            candidates.append(path.parent / f"{prefix}-processes")
+    if stem.endswith("_model"):
+        prefix = stem[: -len("_model")].strip()
+        if prefix:
+            candidates.append(path.parent / f"{prefix}_processes")
+    return unique_strings([str(candidate) for candidate in candidates if candidate.is_dir()])
+
+
 def process_record_key(process_id: str, version: str) -> str:
     return f"{process_id}@{version}"
 
@@ -777,11 +811,23 @@ def normalize_request(
     )
     process_sources = normalized.setdefault("process_sources", {})
     model_path = source_model.get("json_ordered_path")
+    should_auto_detect_process_dirs = not any(
+        [
+            first_non_empty(process_sources.get("process_catalog_path")),
+            ensure_list(process_sources.get("run_dirs")),
+            ensure_list(process_sources.get("process_json_dirs")),
+            ensure_list(process_sources.get("process_json_files")),
+        ]
+    )
     auto_catalog = auto_detect_process_catalog_path(model_path)
-    process_sources["process_catalog_path"] = resolve_path(
+    resolved_catalog = resolve_path(
         base_dir,
         process_sources.get("process_catalog_path") or auto_catalog,
     )
+    if resolved_catalog:
+        process_sources["process_catalog_path"] = resolved_catalog
+    else:
+        process_sources.pop("process_catalog_path", None)
     process_sources["run_dirs"] = [
         path
         for path in (
@@ -798,6 +844,10 @@ def normalize_request(
         )
         if path
     ]
+    if should_auto_detect_process_dirs:
+        process_sources["process_json_dirs"] = unique_strings(
+            process_sources.get("process_json_dirs", []) + auto_detect_process_json_dirs(model_path)
+        )
     process_sources["process_json_files"] = [
         path
         for path in (
@@ -819,6 +869,15 @@ def synthesize_request_from_model(
     model_file: Path,
     projection_mode: str,
 ) -> dict[str, Any]:
+    process_sources: dict[str, Any] = {
+        "allow_mcp_lookup": True,
+    }
+    auto_catalog = auto_detect_process_catalog_path(str(model_file.resolve()))
+    if auto_catalog:
+        process_sources["process_catalog_path"] = auto_catalog
+    auto_process_dirs = auto_detect_process_json_dirs(str(model_file.resolve()))
+    if auto_process_dirs:
+        process_sources["process_json_dirs"] = auto_process_dirs
     return {
         "source_model": {
             "json_ordered_path": str(model_file.resolve()),
@@ -828,10 +887,7 @@ def synthesize_request_from_model(
             "metadata_overrides": {},
             "attach_graph_snapshot": False,
         },
-        "process_sources": {
-            "process_catalog_path": auto_detect_process_catalog_path(str(model_file.resolve())),
-            "allow_mcp_lookup": True,
-        },
+        "process_sources": process_sources,
         "publish": {
             "intent": "dry_run",
             "prepare_process_payloads": True,

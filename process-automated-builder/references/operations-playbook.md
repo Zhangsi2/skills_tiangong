@@ -110,6 +110,7 @@ journalctl --user -u process-from-flow-batch.service -f
 Notes:
 - Service runs batch runner with `--watch` and keeps polling `FLOW_DIR` for newly added `*.json`.
 - Service also loads `~/.openclaw/.env` by default for API/MCP credentials.
+- Install script renders `~/.config/process-from-flow-batch/run-service.sh` with the current checkout path and detected Python executable; rerun it after moving the repo or changing interpreters.
 - Service is configured with `Restart=always`; if runner is externally killed, it relaunches and continues from `STATE_PATH`.
 - Default `STALL_TIMEOUT_SECONDS` in env example is set to `1800` to reduce false positives on long stage-7 runs.
 

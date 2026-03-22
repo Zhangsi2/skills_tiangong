@@ -29,12 +29,13 @@ Use this skill when the source of truth is already a lifecycle model `json_order
 
 ## Inputs
 
-Required top-level fields:
+Always provide:
 
 - `source_model`
 - `projection`
-- `process_sources`
 - `publish`
+
+Provide `process_sources` when local process resolution is not discoverable from the model path or when remote MCP lookup should be constrained.
 
 The source model may be provided as:
 
@@ -48,6 +49,7 @@ Referenced process datasets may be provided via:
 - `process_sources.run_dirs[]`
 - `process_sources.process_json_dirs[]`
 - `process_sources.process_json_files[]`
+- auto-detected sibling directories such as `processes/` or `*-processes/` when using `--model-file`
 - optional MCP lookup driven by `TIANGONG_LCA_REMOTE_*`
 
 ## Outputs
@@ -75,6 +77,8 @@ python3 scripts/lifecyclemodel_resulting_process_builder.py publish \
   --publish-processes \
   --publish-relations
 ```
+
+Use `--model-file` only when the builder can infer local process sources from the model location or when remote MCP lookup is available. Use `--request` to pin `process_sources.*` explicitly.
 
 ## Separation Rule
 
