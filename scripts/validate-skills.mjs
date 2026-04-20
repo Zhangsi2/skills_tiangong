@@ -27,6 +27,9 @@ const defaultSkillNames = [
   'flow-governance-review',
   'lifecyclemodel-recursive-orchestrator',
   'lca-publish-executor',
+  'process-dedup-review',
+  'process-scope-statistics',
+  'tiangong-lca-remote-ops',
 ];
 
 const removedQuickValidatePattern = new RegExp(String.raw`quick_validate` + String.raw`\.py`, 'u');
@@ -125,6 +128,24 @@ const docGuards = [
     message:
       'lifecyclemodel-resulting-process-builder example request should use a platform-neutral file URI placeholder.',
   },
+  {
+    file: 'process-scope-statistics/SKILL.md',
+    pattern: /--env-file/u,
+    message:
+      'process-scope-statistics should rely on the CLI env-loading path instead of a wrapper-owned --env-file flag.',
+  },
+  {
+    file: 'process-dedup-review/SKILL.md',
+    pattern: /review_duplicate_processes\.py|--xlsx/u,
+    message:
+      'process-dedup-review should delegate to tiangong process dedup-review with grouped JSON input, not a bundled Python workbook runtime.',
+  },
+  {
+    file: 'process-dedup-review/agents/openai.yaml',
+    pattern: /workbook/u,
+    message:
+      'process-dedup-review prompt metadata should describe grouped JSON input, not a workbook runtime.',
+  },
 ];
 
 const requiredDocPatterns = [
@@ -140,6 +161,12 @@ const requiredDocPatterns = [
     message: 'run-review.mjs help should include a rows-file process review example.',
   },
   {
+    file: 'lifecycleinventory-review/SKILL.md',
+    pattern: /run-remote-process-review\.mjs/u,
+    message:
+      'lifecycleinventory-review should document the canonical remote snapshot review wrapper.',
+  },
+  {
     file: 'README.md',
     pattern: /process list --json/u,
     message: 'README.md should mention the native process list -> review process rows-file path.',
@@ -149,6 +176,18 @@ const requiredDocPatterns = [
     pattern: /process list --json/u,
     message:
       'README.zh-CN.md should mention the native process list -> review process rows-file path.',
+  },
+  {
+    file: 'process-scope-statistics/SKILL.md',
+    pattern: /tiangong process scope-statistics/u,
+    message:
+      'process-scope-statistics should document the canonical tiangong process scope-statistics command.',
+  },
+  {
+    file: 'process-dedup-review/SKILL.md',
+    pattern: /tiangong process dedup-review/u,
+    message:
+      'process-dedup-review should document the canonical tiangong process dedup-review command.',
   },
 ];
 
@@ -190,6 +229,12 @@ const targetedSmokeChecks = [
     script: 'lifecycleinventory-review/scripts/run-review.mjs',
     args: ['--profile', 'lifecyclemodel', '--help'],
     description: 'lifecyclemodel review profile help',
+  },
+  {
+    skill: 'lifecycleinventory-review',
+    script: 'lifecycleinventory-review/scripts/run-remote-process-review.mjs',
+    args: ['--help'],
+    description: 'remote process review wrapper help',
   },
 ];
 
